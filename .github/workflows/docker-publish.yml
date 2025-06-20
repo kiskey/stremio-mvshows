@@ -52,9 +52,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository | tolower }}
           tags: |
-            # Tag with the value from the manual input field
             type=raw,value=${{ inputs.tag }}
-            # Tag with the 7-character git commit SHA
             type=sha,prefix=,suffix=,format=short
 
       # --------------------------------------------------------------------------
@@ -76,6 +74,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Enable build cache to significantly speed up subsequent builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
