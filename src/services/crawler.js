@@ -1,5 +1,5 @@
 // src/services/crawler.js
-const { CheerioCrawler, EnqueueStrategy } = require('crawlee');
+const { CheerioCrawler } = require('crawlee');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const config = require('../config/config');
@@ -11,16 +11,13 @@ const generateThreadHash = (title, magnets) => {
 
 const createCrawler = (processor) => {
     return new CheerioCrawler({
-        maxRequestsPerCrawl: config.maxCrawlPages + 10, // Safety buffer
-        async requestHandler({ $, request, enqueueLinks }) {
+        // --- USE CONFIG VALUES ---
+        maxConcurrency: config.scraperConcurrency,
+        failedRequestRetryCount: config.scraperRetryCount,
+        // We will manually manage requests, so no need for enqueueLinks
+        
+        async requestHandler({ $, request }) {
             logger.info(`Crawling: ${request.url}`);
-
-            // Enqueue next pages
-            await enqueueLinks({
-                // This selector must be adapted to the forum's "Next Page" button
-                selector: 'a.next-page-link',
-                strategy: EnqueueStrategy.SameDomain,
-            });
 
             // This selector must be adapted to the forum's thread list structure
             const threadElements = $('div.thread-item'); // EXAMPLE SELECTOR
@@ -37,15 +34,27 @@ const createCrawler = (processor) => {
                 }
             }
         },
-        failedRequestRetryCount: 1,
     });
 };
 
 const runCrawler = async (processor) => {
     const crawler = createCrawler(processor);
-    const startUrl = `${config.forumUrl}/page/1`;
-    logger.info(`Starting crawl at: ${startUrl}`);
-    await crawler.run([startUrl]);
+    
+    // --- GENERATE START URLS FROM CONFIG ---
+    const startUrls = [];
+    for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
+        // Adapt the URL structure if your forum uses something other than /page/
+        startUrls.push(`${config.forumUrl}/page/${i}`);
+    }
+
+    logger.info({
+        startPage: config.scrapeStartPage,
+        endPage: config.scrapeEndPage,
+        concurrency: config.scraperConcurrency,
+        retryCount: config.scraperRetryCount,
+    }, `Starting crawl of ${startUrls.length} pages.`);
+    
+    await crawler.run(startUrls);
     logger.info("Crawl finished.");
 };
 
