@@ -11,10 +11,11 @@ const generateThreadHash = (title, magnets) => {
 
 const createCrawler = (processor) => {
     return new CheerioCrawler({
-        // --- USE CONFIG VALUES ---
+        // --- CORRECTED CONFIG VALUES for Crawlee v3 ---
         maxConcurrency: config.scraperConcurrency,
-        failedRequestRetryCount: config.scraperRetryCount,
-        // We will manually manage requests, so no need for enqueueLinks
+        
+        // This is the fix: 'failedRequestRetryCount' is now 'maxRequestRetries'
+        maxRequestRetries: config.scraperRetryCount, 
         
         async requestHandler({ $, request }) {
             logger.info(`Crawling: ${request.url}`);
@@ -40,7 +41,6 @@ const createCrawler = (processor) => {
 const runCrawler = async (processor) => {
     const crawler = createCrawler(processor);
     
-    // --- GENERATE START URLS FROM CONFIG ---
     const startUrls = [];
     for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
         // Adapt the URL structure if your forum uses something other than /page/
@@ -51,7 +51,8 @@ const runCrawler = async (processor) => {
         startPage: config.scrapeStartPage,
         endPage: config.scrapeEndPage,
         concurrency: config.scraperConcurrency,
-        retryCount: config.scraperRetryCount,
+        // Log the correct property name
+        maxRetries: config.scraperRetryCount, 
     }, `Starting crawl of ${startUrls.length} pages.`);
     
     await crawler.run(startUrls);
