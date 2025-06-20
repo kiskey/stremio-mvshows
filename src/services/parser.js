@@ -6,7 +6,10 @@ const logger = require('../utils/logger');
 const crud = require('../database/crud');
 
 const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-const llm = genAI.getGenerativeModel({ model: "gemini-pro" });
+// --- USE CONFIGURABLE MODEL ---
+const llm = genAI.getGenerativeModel({ model: config.geminiModel }); 
+
+logger.info(`LLM Parser initialized with model: ${config.geminiModel}`);
 
 const parseTitle = async (rawTitle) => {
     const parsed = ptt.parse(rawTitle);
