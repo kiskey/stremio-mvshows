@@ -24,8 +24,16 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v4
 
+      # --------------------------------------------------------------------------
+      # NEW STEP ADDED: Convert the repository name to lowercase.
+      # We do this because GHCR requires lowercase image names.
+      # The output 'repo_lc' will be used in the next step.
+      # --------------------------------------------------------------------------
+      - name: Convert repository name to lowercase
+        id: string
+        run: echo "repo_lc=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       # Step 2: Log in to the GitHub Container Registry (GHCR)
-      # The GITHUB_TOKEN is automatically created and provided by GitHub Actions.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -38,10 +46,12 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Corrected: Use the toLower() function for the repository name
-          images: ghcr.io/${{ toLower(github.repository) }}
+          # CORRECTED: We now use the output from the previous 'string' step.
+          images: ghcr.io/${{ steps.string.outputs.repo_lc }}
           tags: |
+            # Tag with the value from the manual input field
             type=raw,value=${{ inputs.tag }}
+            # Tag with the 7-character git commit SHA for traceability
             type=sha,prefix=,suffix=,format=short
 
       # Step 4: Set up Docker Buildx for advanced build features
