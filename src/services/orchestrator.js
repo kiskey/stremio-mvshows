@@ -11,15 +11,29 @@ let isCrawling = false;
 const processThread = async (threadData) => {
     const { thread_hash, raw_title, magnet_uris } = threadData;
 
-    const existing = await crud.findThreadByHash(thread_hash);
-    if (existing) {
-        logger.debug(`Skipping existing thread hash: ${thread_hash.substring(0, 10)}`);
-        await models.Thread.update({ last_seen: new Date() }, { where: { thread_hash } });
-        return;
+    // Find if a thread with this *title* already exists
+    const existingThread = await models.Thread.findOne({ where: { raw_title } });
+
+    if (existingThread) {
+        // Case 1: Thread exists. Check if it has been updated.
+        if (existingThread.thread_hash === thread_hash) {
+            // The content is identical, skip.
+            logger.debug(`Skipping unchanged thread: ${raw_title}`);
+            await models.Thread.update({ last_seen: new Date() }, { where: { thread_hash } });
+            return;
+        } else {
+            // The content has CHANGED. We must re-process.
+            logger.info(`Thread has been updated, re-processing: ${raw_title}`);
+            // By deleting the old record, we can treat it as a new thread.
+            // This cleans up the old hash and avoids primary key conflicts.
+            // Streams will be re-added, and UNIQUE constraints will prevent duplicates.
+            await existingThread.destroy();
+        }
     }
     
-    logger.info(`Processing new thread: ${raw_title}`);
+    logger.info(`Processing new or updated thread: ${raw_title}`);
 
+    // The rest of the logic proceeds as if it's a new thread
     // 2. Normalize Title
     const parsedTitle = await parser.parseTitle(raw_title);
     if (!parsedTitle) {
@@ -41,7 +55,6 @@ const processThread = async (threadData) => {
         clean_title: parsedTitle.clean_title,
         year: parsedTitle.year,
         tmdb_id: tmdbData.dbEntry.tmdb_id,
-        last_seen: new Date(),
     });
 
     // 4. Parse Magnets and create streams
