@@ -2,10 +2,13 @@
 const pino = require('pino');
 const config = require('../config/config');
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 const logger = pino({
     level: config.logLevel,
-    transport: process.env.NODE_ENV !== 'production' 
-        ? { target: 'pino-pretty' } 
+    // Use pino-pretty only when NOT in production
+    transport: !isProduction
+        ? { target: 'pino-pretty' }
         : undefined,
 });
 
