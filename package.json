@@ -20,6 +20,7 @@
     "parse-torrent-title": "^1.4.0",
     "pino": "^8.18.0",
     "pino-http": "^9.0.0",
+     "node-cron": "^3.0.3",
     "sequelize": "^6.37.1",
     "sqlite3": "^5.1.7"
   },
