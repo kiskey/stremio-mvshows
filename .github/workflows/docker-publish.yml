@@ -1,8 +1,6 @@
 name: Build and Push Docker Image to GHCR
 
-# --------------------------------------------------------------------------
 # TRIGGER: This workflow runs only when manually triggered from the Actions tab.
-# --------------------------------------------------------------------------
 on:
   workflow_dispatch:
     inputs:
@@ -15,25 +13,19 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     
-    # --------------------------------------------------------------------------
-    # PERMISSIONS: The job needs permission to write to the GitHub Packages
-    # (Container Registry) and read the repository contents.
-    # --------------------------------------------------------------------------
+    # PERMISSIONS: The job needs permission to write to the GitHub Container
+    # Registry and read the repository contents.
     permissions:
       contents: read
       packages: write
 
     steps:
-      # --------------------------------------------------------------------------
       # Step 1: Check out the repository code
-      # --------------------------------------------------------------------------
       - name: Check out the repo
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------------------------
       # Step 2: Log in to the GitHub Container Registry (GHCR)
       # The GITHUB_TOKEN is automatically created and provided by GitHub Actions.
-      # --------------------------------------------------------------------------
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -41,31 +33,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --------------------------------------------------------------------------
       # Step 3: Extract Docker metadata (like tags and labels)
-      # This action automatically generates appropriate tags. We'll tag the image
-      # with the user-provided tag and also with the Git commit SHA for traceability.
-      # --------------------------------------------------------------------------
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository | tolower }}
+          # Corrected: Use the toLower() function for the repository name
+          images: ghcr.io/${{ toLower(github.repository) }}
           tags: |
             type=raw,value=${{ inputs.tag }}
             type=sha,prefix=,suffix=,format=short
 
-      # --------------------------------------------------------------------------
       # Step 4: Set up Docker Buildx for advanced build features
-      # --------------------------------------------------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # --------------------------------------------------------------------------
       # Step 5: Build the Docker image and push it to GHCR
-      # This step uses the metadata from Step 3 for tagging and labeling.
-      # It also enables caching to speed up future builds.
-      # --------------------------------------------------------------------------
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -74,5 +57,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Enable build cache to significantly speed up subsequent builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
