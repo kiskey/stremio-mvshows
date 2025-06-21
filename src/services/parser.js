@@ -1,61 +1,57 @@
 // src/services/parser.js
 const ptt = require('parse-torrent-title');
-// FIX: Use the new, correct Google AI SDK
-const { GoogleAI, HarmCategory, HarmBlockThreshold } = require("@google/genai"); 
-const config = require('../config/config');
 const logger = require('../utils/logger');
-const crud = require('../database/crud');
 
-// FIX: Initialize with the new, simpler constructor
-const genAI = new GoogleAI(config.geminiApiKey); 
+/**
+ * Attempts to parse a thread title using ptt, with a regex fallback.
+ * @param {string} rawTitle The raw title from the forum.
+ * @returns {object|null} An object with { clean_title, year } or null.
+ */
+function parseTitle(rawTitle) {
+    const pttResult = ptt.parse(rawTitle);
 
-const llm = genAI.getGenerativeModel({ 
-    model: config.geminiModel,
-    // Safety settings prevent the model from refusing to parse titles it deems sensitive
-    safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ]
-}); 
-
-logger.info(`LLM Parser initialized with model: ${config.geminiModel}`);
-
-const parseTitle = async (rawTitle) => {
-    const parsed = ptt.parse(rawTitle);
-    
-    if (parsed.title && parsed.year) {
-        logger.info({ ptt_result: parsed }, `PTT successfully parsed: ${rawTitle}`);
+    if (pttResult.title && pttResult.year) {
+        logger.info({ ptt_result: pttResult }, `PTT successfully parsed title: ${rawTitle}`);
+        return { clean_title: pttResult.title, year: pttResult.year };
     }
 
-    // IMPROVEMENT: More robust prompt engineering
-    const prompt = `Analyze the raw text below. Extract the TV show or movie title and its release year. Respond with ONLY a valid JSON object like {"title": "The Show Name", "year": 2023}. Do not include the \`\`\`json markdown wrapper. Raw text: "${rawTitle}"`;
-
-    try {
-        const result = await llm.generateContent(prompt);
-        // The new SDK recommends using `result.response.text()`
-        const responseText = result.response.text(); 
-        await crud.logLlmCall('title', prompt, responseText);
-        const data = JSON.parse(responseText.trim());
-        
-        if (data.title && data.year) {
-            logger.info({ llm_result: data }, `LLM successfully parsed title`);
-            return { clean_title: data.title, year: parseInt(data.year) };
-        }
-    } catch (e) {
-        logger.error(e, 'LLM title parsing failed');
+    // --- PTT Fallback Logic ---
+    logger.warn(`PTT failed to parse title and year. Attempting regex fallback for: "${rawTitle}"`);
+    let clean_title = null;
+    let year = null;
+    
+    // Regex to find a 4-digit year (1980-2049)
+    const yearMatch = rawTitle.match(/\b(19[89]\d|20[0-4]\d)\b/);
+    if (yearMatch) {
+        year = parseInt(yearMatch[0], 10);
     }
     
-    // Fallback to PTN result if the LLM fails
-    if (parsed.title && parsed.year) {
-        logger.warn('LLM failed, falling back to PTT result for title parsing.');
-        return { clean_title: parsed.title, year: parsed.year };
+    // Regex to get the title part, stopping at the year or common delimiters.
+    // This captures everything from the start up to a year, a season indicator (S01), or quality tags.
+    const titleMatch = rawTitle.match(/^(.+?)(?:\s\(?\d{4}\)?|\sS\d{2}|\s\d{3,4}p)/i);
+    if (titleMatch) {
+        // Clean up the matched title
+        clean_title = titleMatch[1]
+            .replace(/[._]/g, ' ') // Replace dots and underscores with spaces
+            .replace(/\[.*?\]/g, '') // Remove content in square brackets
+            .trim();
     }
+    
+    if (clean_title && year) {
+        logger.info({ clean_title, year }, 'Regex fallback succeeded.');
+        return { clean_title, year };
+    }
+    
+    logger.error(`All parsing attempts failed for title: "${rawTitle}"`);
     return null;
-};
+}
 
-const parseMagnet = async (magnetUri) => {
+/**
+ * Parses a magnet link's display name (dn) to extract stream metadata.
+ * @param {string} magnetUri The full magnet URI.
+ * @returns {object|null} An object with stream metadata or null.
+ */
+function parseMagnet(magnetUri) {
     try {
         const params = new URLSearchParams(magnetUri.split('?')[1]);
         const infohash = params.get('xt')?.replace('urn:btih:', '');
@@ -66,30 +62,30 @@ const parseMagnet = async (magnetUri) => {
             return null;
         }
 
-        // IMPROVEMENT: More robust prompt engineering
-        const prompt = `Analyze the torrent filename below. Extract the metadata. Respond with ONLY a valid JSON object. The 'episodes' field must be an array of numbers. If the filename indicates a range like "E01-E05", list all numbers in the array. Do not include the \`\`\`json markdown wrapper. Filename: "${filename}"\n\nExample JSON Response: {"season": 1, "episodes": [1, 2, 3, 4, 5], "quality": "1080p", "language": "English"}`;
-        
-        const result = await llm.generateContent(prompt);
-        const responseText = result.response.text();
-        await crud.logLlmCall('magnet', prompt, responseText);
-        const data = JSON.parse(responseText.trim());
-        
-        if (!data.season || !data.episodes || !Array.isArray(data.episodes) || data.episodes.length === 0) {
-             throw new Error("LLM response missing required fields or has an incorrect format.");
+        const pttResult = ptt.parse(filename);
+
+        // PTT is very good at this part, so we rely on it heavily.
+        // We require at least a season and episode to proceed.
+        if (!pttResult.season || !pttResult.episode) {
+            logger.warn({ filename }, 'PTT failed to find season/episode in magnet name.');
+            return null;
         }
-        
+
+        // PTT returns a single episode number. We can create an array for consistency.
+        const episodes = [pttResult.episode];
+
         return {
             infohash,
-            season: data.season,
-            episodes: data.episodes,
-            quality: data.quality || 'SD',
-            language: data.language || 'Unknown',
+            season: pttResult.season,
+            episodes: episodes, // Handle single episode
+            quality: pttResult.resolution || 'SD',
+            language: pttResult.language || 'Unknown',
         };
     } catch (e) {
         const shortMagnet = magnetUri.substring(0, 70);
-        logger.error({ err: e, magnet: `${shortMagnet}...` }, `LLM magnet parsing failed`);
+        logger.error({ err: e, magnet: `${shortMagnet}...` }, `Magnet parsing failed`);
         return null;
     }
-};
+}
 
 module.exports = { parseTitle, parseMagnet };
