@@ -32,17 +32,19 @@ async function main() {
 
     // --- Define Routes ---
     
-    // Redirect root to the manifest for easy discovery
-    app.get('/', (req, res) => res.redirect('/manifest.json'));
+    // FIX: Serve the admin dashboard on the root URL
+    app.get('/', (req, res) => {
+        res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+    });
 
-    // Serve the admin dashboard UI
+    // Also serve the admin UI at /admin for a consistent user experience
     app.get('/admin', (req, res) => {
         res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
     });
 
     // Register API route handlers
     app.use(stremioRoutes); // Public Stremio routes (manifest, catalog, stream)
-    app.use('/admin', adminRoutes); // Private admin API routes
+    app.use('/admin/api', adminRoutes); // Private admin API routes, now namespaced to avoid conflicts
 
     // Start listening for requests
     app.listen(config.port, () => {
@@ -51,12 +53,9 @@ async function main() {
     
     // 3. Perform an initial crawl on application startup
     logger.info('Performing initial crawl on startup...');
-    // We run this without awaiting so the server can start responding immediately.
-    // The `isCrawling` flag in the orchestrator prevents race conditions.
     runFullWorkflow();
     
     // 4. Schedule the recurring crawl using node-cron
-    // The schedule is defined in a standard cron format.
     const schedule = '0 */6 * * *'; // Every 6 hours
     
     cron.schedule(schedule, () => {
@@ -64,7 +63,7 @@ async function main() {
         runFullWorkflow();
     }, {
         scheduled: true,
-        timezone: "Etc/UTC" // Use UTC to avoid timezone issues on servers
+        timezone: "Etc/UTC"
     });
     
     logger.info(`Crawler is now scheduled to run automatically on schedule: "${schedule}" (UTC).`);
