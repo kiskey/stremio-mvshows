@@ -8,10 +8,11 @@ const tmdbApi = axios.create({
     params: {
         api_key: config.tmdbApiKey,
     },
+    timeout: 5000 // 5-second timeout for API calls
 });
 
 /**
- * Searches TMDB for a movie or TV show.
+ * Searches TMDB for a movie or TV show by title and year.
  * @param {string} title - The clean title of the show/movie.
  * @param {number} year - The release year.
  * @returns {Promise<Object|null>} - The formatted TMDB data or null if not found.
@@ -19,22 +20,22 @@ const tmdbApi = axios.create({
 const getTmdbMetadata = async (title, year) => {
     logger.debug(`Searching TMDB for: "${title}" (${year})`);
     
-    // First attempt: Search with title and year for highest accuracy
+    // Attempt 1: Search with title and year (highest accuracy)
     try {
         const response = await tmdbApi.get('/search/multi', {
             params: { query: title, first_air_date_year: year, year: year },
         });
 
         if (response.data && response.data.results.length > 0) {
-            const result = response.data.results[0]; // Assume the first result is the best match
-            logger.info(`TMDB match found for "${title}" with year: ${result.id}`);
-            return formatTmdbData(result);
+            const result = response.data.results[0];
+            logger.info(`TMDB primary match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
+            return await formatTmdbData(result);
         }
     } catch (error) {
-        logger.error({ err: error.message }, `TMDB API error during search with year for "${title}"`);
+        logger.error({ err: error.message }, `TMDB API error on primary search for "${title}"`);
     }
 
-    // Fallback: Search with title only if the first attempt fails
+    // Attempt 2: Fallback to title-only search
     logger.warn(`No TMDB match with year. Retrying with title only for: "${title}"`);
     try {
         const response = await tmdbApi.get('/search/multi', {
@@ -43,11 +44,11 @@ const getTmdbMetadata = async (title, year) => {
 
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
-            logger.info(`TMDB fallback match found for "${title}": ${result.id}`);
-            return formatTmdbData(result);
+            logger.info(`TMDB fallback match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
+            return await formatTmdbData(result);
         }
     } catch (error) {
-        logger.error({ err: error.message }, `TMDB API error during fallback search for "${title}"`);
+        logger.error({ err: error.message }, `TMDB API error on fallback search for "${title}"`);
     }
 
     logger.error(`No TMDB match found for "${title}" after all attempts.`);
@@ -55,32 +56,63 @@ const getTmdbMetadata = async (title, year) => {
 };
 
 /**
- * Formats the raw TMDB API response into the structure needed for our database.
- * @param {Object} tmdbResult - A single result object from the TMDB API.
- * @returns {Object} - An object containing the formatted data for storage.
+ * Fetches TMDB data using a specific IMDb or TMDB ID.
+ * @param {string} id - The ID string (e.g., "tt12345" or "tmdb:67890").
+ * @returns {Promise<Object|null>}
  */
-const formatTmdbData = (tmdbResult) => {
-    // We need to fetch external IDs (like IMDb ID) separately for multi-search results
-    // This step is simplified here, but in a full implementation, you'd make another
-    // API call to the /movie/{id}/external_ids or /tv/{id}/external_ids endpoint.
-    // For now, we'll assume the primary search is enough and handle IMDb ID if available.
-    
-    // Placeholder for IMDb ID logic. A real app would get this from another API call.
-    const imdb_id = tmdbResult.imdb_id || `tt${tmdbResult.id}`; // A common but not guaranteed fallback
+const getTmdbMetadataById = async (id) => {
+    try {
+        let result;
+        if (id.startsWith('tt')) {
+            logger.debug(`Looking up by IMDb ID: ${id}`);
+            const findResponse = await tmdbApi.get(`/find/${id}`, { params: { external_source: 'imdb_id' } });
+            result = findResponse.data.tv_results[0] || findResponse.data.movie_results[0];
+        } else if (id.startsWith('tmdb:')) {
+            const [type, tmdbId] = id.split(':');
+            logger.debug(`Looking up by TMDB ID: ${tmdbId} (Type: ${type})`);
+            if (type !== 'tv' && type !== 'movie') { throw new Error('Invalid type in tmdb:id'); }
+            const findResponse = await tmdbApi.get(`/${type}/${tmdbId}`);
+            result = findResponse.data;
+        } else {
+            logger.error(`Invalid manual ID format provided: ${id}`);
+            return null;
+        }
+
+        if (result) {
+            return await formatTmdbData(result);
+        }
+    } catch (error) {
+        logger.error({ err: error.message }, `TMDB API error during manual lookup for ID: ${id}`);
+    }
+    return null;
+};
+
+/**
+ * Takes a raw TMDB result and enriches it (e.g., gets IMDb ID) and formats for our DB.
+ * @param {Object} tmdbResult - A single result object from the TMDB API.
+ * @returns {Promise<Object>} - An object containing the formatted data for storage.
+ */
+const formatTmdbData = async (tmdbResult) => {
+    let imdb_id = null;
+    const media_type = tmdbResult.media_type || (tmdbResult.first_air_date ? 'tv' : 'movie');
+
+    try {
+        const externalIdsResponse = await tmdbApi.get(`/${media_type}/${tmdbResult.id}/external_ids`);
+        imdb_id = externalIdsResponse.data.imdb_id;
+    } catch (e) {
+        logger.warn(`Could not fetch external IDs for TMDB ID ${tmdbResult.id}.`);
+    }
 
     return {
-        // This is the data that will be stored in the TmdbMetadata table's `data` JSON blob
-        rawData: tmdbResult, 
-        
-        // This is the formatted entry for direct insertion into the TmdbMetadata table
         dbEntry: {
             tmdb_id: tmdbResult.id.toString(),
-            imdb_id: imdb_id, // This needs a proper lookup in a production app
-            data: {
-                media_type: tmdbResult.media_type,
+            imdb_id: imdb_id,
+            data: { // This is the JSON blob stored in the database
+                media_type: media_type,
                 title: tmdbResult.title || tmdbResult.name,
                 poster_path: tmdbResult.poster_path,
-                // store other relevant data you might need for catalogs...
+                backdrop_path: tmdbResult.backdrop_path,
+                overview: tmdbResult.overview,
             },
         }
     };
@@ -88,4 +120,5 @@ const formatTmdbData = (tmdbResult) => {
 
 module.exports = {
     getTmdbMetadata,
+    getTmdbMetadataById,
 };
