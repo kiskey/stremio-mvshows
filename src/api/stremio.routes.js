@@ -46,6 +46,7 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     }
 
     const limit = 100;
+
     const metas = await models.TmdbMetadata.findAll({
         where: {
             imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } 
@@ -56,14 +57,20 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         raw: true
     });
     
-    const stremioMetas = metas.map(meta => ({
-        id: meta.imdb_id,
-        type: 'series',
-        name: meta.data.title,
-        poster: meta.data.poster_path 
-            ? `https://image.tmdb.org/t/p/w500${meta.data.poster_path}`
-            : null,
-    }));
+    // FIX: Properly parse the 'data' JSON string and construct the poster URL.
+    const stremioMetas = metas.map(meta => {
+        // The 'data' column is a stringified JSON, so we must parse it first.
+        const parsedData = JSON.parse(meta.data); 
+
+        return {
+            id: meta.imdb_id,
+            type: 'series',
+            name: parsedData.title, // Use the title from the parsed data
+            poster: parsedData.poster_path 
+                ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
+                : null, // Construct the full URL if poster_path exists
+        };
+    });
 
     res.json({ metas: stremioMetas });
 });
@@ -81,12 +88,10 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     const streams = await crud.findStreams(meta.tmdb_id, season, episode);
     if (!streams || streams.length === 0) { return res.json({ streams: [] }); }
     
-    // FIX: Sort streams by quality before sending the response
     streams.sort(sortStreamsByQuality);
 
     const streamList = streams.map(s => ({
         infoHash: s.infohash,
-        // FIX: Re-format name and title as requested
         name: `[TamilMV] - ${s.quality} 📺`,
         title: `S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')} | ${s.language} 🎬\n${s.quality}`,
         sources: config.trackers
