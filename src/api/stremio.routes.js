@@ -5,7 +5,7 @@ const config = require('../config/config');
 const { models } = require('../database/connection');
 const crud = require('../database/crud');
 const { Op } = require('sequelize');
-const logger = require('../utils/logger'); // Import logger for better debugging
+const logger = require('../utils/logger');
 
 // --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
@@ -35,7 +35,7 @@ router.get('/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// --- CORRECTED CATALOG HANDLER ---
+// --- DEFINITIVELY CORRECTED CATALOG HANDLER ---
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
@@ -48,37 +48,27 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Not Found' });
     }
 
-    const limit = 100; // Stremio's typical page size, can be adjusted
+    const limit = 100;
 
     try {
-        // FIX: The query now originates from the 'Thread' model, which represents our actual catalog entries.
-        const threads = await models.Thread.findAll({
+        // FIX: The query now correctly originates from the 'TmdbMetadata' model.
+        // This ensures one unique entry per show, which is the correct behavior for a catalog.
+        const metas = await models.TmdbMetadata.findAll({
             where: {
-                status: 'linked', // Only show threads that have been successfully linked to metadata
-                tmdb_id: { [Op.ne]: null }
+                imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' }
             },
-            // Include the associated metadata from the other table
-            include: [{
-                model: models.TmdbMetadata,
-                where: {
-                    imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' }
-                },
-                required: true // This makes it an INNER JOIN
-            }],
             limit: limit,
             offset: skip,
-            order: [['updatedAt', 'DESC']], // Order by the last time the thread was seen/updated
+            order: [['updatedAt', 'DESC']], // Order by when the show was last updated in our DB
+            raw: true
         });
         
-        // Map the result to the Stremio meta object format
-        const stremioMetas = threads.map(thread => {
-            const tmdbData = thread.TmdbMetadata.data; // Access the joined data
-            const parsedData = (typeof tmdbData === 'string') ? JSON.parse(tmdbData) : tmdbData;
-
+        const stremioMetas = metas.map(meta => {
+            const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
             return {
-                id: thread.TmdbMetadata.imdb_id, // Use the IMDb ID for Stremio
+                id: meta.imdb_id,
                 type: 'series',
-                name: thread.clean_title, // Use the title from the thread for more specificity (e.g., includes season)
+                name: parsedData.title,
                 poster: parsedData.poster_path 
                     ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
                     : null,
