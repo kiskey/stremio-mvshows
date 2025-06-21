@@ -49,8 +49,8 @@
                 <form id="rescue-form">
                     <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
                     <input type="hidden" id="thread-id-input">
-                    <label for="manual-id">Enter Correct IMDb ID (tt...) or TMDB ID (tmdb:...):</label>
-                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tmdb:94997" required>
+                    <label for="manual-id">Enter Correct IMDb ID (tt...) or TMDB ID (tv:12345):</label>
+                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997" required>
                     <br><br>
                     <button type="submit">Rescue & Rematch</button>
                 </form>
@@ -60,7 +60,8 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-    const apiBase = '/admin';
+    // FIX: All API calls now go to the /admin/api/ namespace
+    const apiBase = '/admin/api'; 
     const totalLinkedEl = document.getElementById('total-linked');
     const totalPendingEl = document.getElementById('total-pending');
     const totalFailedEl = document.getElementById('total-failed');
