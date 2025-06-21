@@ -22,11 +22,26 @@ const config = {
     addonVersion: '1.0.0',
 
     trackers: [
-        "udp://tracker.openbittorrent.com:80",
         "udp://tracker.opentrackr.org:1337/announce",
-        "udp://tracker.torrent.eu.org:451/announce",
-        "udp://tracker.ngosang.dev:1337/announce",
-        "udp://p4p.arenabg.com:1337/announce"
+"udp://open.demonii.com:1337/announce",
+"udp://open.stealth.si:80/announce",
+"udp://exodus.desync.com:6969/announce",
+"udp://tracker.torrent.eu.org:451/announce",
+"udp://tracker.dump.cl:6969/announce",
+"udp://tracker.bittor.pw:1337/announce",
+"udp://p4p.arenabg.com:1337/announce",
+"udp://open.free-tracker.ga:6969/announce",
+"udp://leet-tracker.moe:1337/announce",
+"udp://explodie.org:6969/announce",
+"http://www.torrentsnipe.info:2701/announce",
+"http://tracker.xiaoduola.xyz:6969/announce",
+"http://tracker.vanitycore.co:6969/announce",
+"http://tracker.moxing.party:6969/announce",
+"http://tracker.dmcomic.org:2710/announce",
+"http://retracker.spark-rostov.ru:80/announce",
+"http://finbytes.org:80/announce.php",
+"http://buny.uk:6969/announce",
+"udp://wepzone.net:6969/announce"
     ],
     
     appHost: process.env.APP_HOST || 'http://127.0.0.1:3000',
