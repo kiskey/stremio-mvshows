@@ -5,17 +5,14 @@ const config = {
     port: process.env.PORT || 3000,
     logLevel: process.env.LOG_LEVEL || 'info',
     
-  
-    // --- NEW: Scraper Configuration ---
-    forumUrl: process.env.FORUM_URL, // e.g., "https://some-forum.com/c/movies/12"
+    // Scraper Configuration
+    forumUrl: process.env.FORUM_URL,
     scrapeStartPage: parseInt(process.env.SCRAPE_START_PAGE, 10) || 1,
-    scrapeEndPage: parseInt(process.env.SCRAPE_END_PAGE, 10) || 20, // Replaces maxCrawlPages
-    scraperConcurrency: parseInt(process.env.SCRAPER_CONCURRENCY, 10) || 5, // Number of parallel requests
-    scraperRetryCount: parseInt(process.env.SCRAPER_RETRY_COUNT, 10) || 3, // Number of retries on failure
-
-    // --- NEW: LLM Configuration ---
-    geminiApiKey: process.env.GEMINI_API_KEY,
-    geminiModel: process.env.GEMINI_MODEL || 'gemini-pro', // Make the model configurable
+    scrapeEndPage: parseInt(process.env.SCRAPE_END_PAGE, 10) || 20,
+    scraperConcurrency: parseInt(process.env.SCRAPER_CONCURRENCY, 10) || 5,
+    scraperRetryCount: parseInt(process.env.SCRAPER_RETRY_COUNT, 10) || 3,
+    
+    // TMDB API Key
     tmdbApiKey: process.env.TMDB_API_KEY,
 
     // Stremio Manifest
@@ -36,8 +33,8 @@ const config = {
 };
 
 // Validate required variables
-if (!config.forumUrl || !config.geminiApiKey || !config.tmdbApiKey) {
-    throw new Error("Missing required environment variables: FORUM_URL, GEMINI_API_KEY, TMDB_API_KEY");
+if (!config.forumUrl || !config.tmdbApiKey) {
+    throw new Error("Missing required environment variables: FORUM_URL, TMDB_API_KEY");
 }
 
 module.exports = config;
