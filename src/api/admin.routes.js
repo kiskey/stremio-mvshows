@@ -9,13 +9,14 @@ const crud = require('../database/crud');
 const logger = require('../utils/logger');
 
 // Endpoint to manually trigger the crawling and processing workflow
+// Now accessed via POST /admin/api/trigger-crawl
 router.post('/trigger-crawl', (req, res) => {
-    // Run in the background; don't make the user wait
     runFullWorkflow();
     res.status(202).json({ message: "Crawl workflow triggered successfully. Check logs for progress." });
 });
 
 // Endpoint to get statistics for the dashboard UI
+// Now accessed via GET /admin/api/dashboard
 router.get('/dashboard', async (req, res) => {
     try {
         const linked = await models.Thread.count({ where: { status: 'linked' } });
@@ -29,6 +30,7 @@ router.get('/dashboard', async (req, res) => {
 });
 
 // Endpoint to get the list of threads pending a TMDB match
+// Now accessed via GET /admin/api/pending
 router.get('/pending', async (req, res) => {
     try {
         const pendingThreads = await models.Thread.findAll({
@@ -43,6 +45,7 @@ router.get('/pending', async (req, res) => {
 });
 
 // Endpoint to manually rescue a pending thread with a correct ID
+// Now accessed via POST /admin/api/rescue
 router.post('/rescue', async (req, res) => {
     const { threadId, manualId } = req.body;
     if (!threadId || !manualId) {
@@ -55,22 +58,16 @@ router.post('/rescue', async (req, res) => {
             return res.status(404).json({ message: 'Pending thread not found.' });
         }
 
-        // Use the metadata service to get full data from the provided ID
         const tmdbData = await metadata.getTmdbMetadataById(manualId);
         if (!tmdbData) {
             return res.status(400).json({ message: `Could not find a match for ID: ${manualId}` });
         }
         
-        // --- Success! Let's process everything. ---
-        
-        // 1. Save the new, correct metadata
         await models.TmdbMetadata.upsert(tmdbData.dbEntry);
-
-        // 2. Update the thread to link it to the new metadata
+        
         thread.tmdb_id = tmdbData.dbEntry.tmdb_id;
         thread.status = 'linked';
         
-        // 3. Process its stored magnets into streams
         const streamsToCreate = [];
         for (const magnet of thread.magnet_uris) {
             const streamDetails = await parser.parseMagnet(magnet);
@@ -88,8 +85,7 @@ router.post('/rescue', async (req, res) => {
             }
         }
         await crud.createStreams(streamsToCreate);
-
-        // 4. Clear the stored magnets now that they are processed and save the thread
+        
         thread.magnet_uris = null;
         await thread.save();
         
