@@ -3,13 +3,29 @@ const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
     const Thread = sequelize.define('Thread', {
-        thread_hash: { type: DataTypes.STRING, primaryKey: true },
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true }, // Add a simple ID for easy reference
+        thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
         year: DataTypes.INTEGER,
-        tmdb_id: { type: DataTypes.STRING, references: { model: 'TmdbMetadata', key: 'tmdb_id' } },
+        tmdb_id: { type: DataTypes.STRING, references: { model: 'TmdbMetadata', key: 'tmdb_id' }, allowNull: true }, // Allow NULL for pending
+        
+        // NEW: Status to track the state of the thread
+        status: { 
+            type: DataTypes.STRING, 
+            defaultValue: 'linked', // 'linked', 'pending_tmdb', 'failed_parse'
+            allowNull: false
+        },
+        
+        // NEW: Store magnets here for pending threads so we can re-process them later
+        magnet_uris: {
+            type: DataTypes.JSON,
+            allowNull: true
+        },
+        
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'threads', timestamps: false });
+    }, { tableName: 'threads', timestamps: true }); // Enable timestamps for better sorting
+
 
     const TmdbMetadata = sequelize.define('TmdbMetadata', {
         tmdb_id: { type: DataTypes.STRING, primaryKey: true },
