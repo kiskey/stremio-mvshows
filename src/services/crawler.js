@@ -5,7 +5,9 @@ const logger = require('../utils/logger');
 const config = require('../config/config');
 
 const generateThreadHash = (title, magnets) => {
-    const data = title + [...magnets].sort().join('');
+    // Hash now uses only the magnet URIs for consistency
+    const magnetUris = magnets.map(m => m.uri).sort().join('');
+    const data = title + magnetUris;
     return crypto.createHash('sha256').update(data).digest('hex');
 };
 
@@ -30,12 +32,7 @@ const createCrawler = (processor) => {
     });
 };
 
-async function handleListPage({ $, request, log, crawler }) {
-    log.info(`Processing LIST page: ${request.url}`);
-
-    // FIX: Make the selector more specific to only target the main topic link.
-    // This looks for an <a> tag directly inside a <span> with class 'ipsType_break',
-    // which is inside the h4. This excludes other links like pagination.
+async function handleListPage({ $, log, crawler }) {
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
     const newRequests = [];
@@ -67,20 +64,35 @@ async function handleDetailPage({ $, request, log }, processor) {
     log.info(`Processing DETAIL page for: "${raw_title}"`);
 
     const magnetSelector = 'a[href^="magnet:?"]';
-    const magnet_uris = $(magnetSelector)
-        .map((i, el) => $(el).attr('href'))
-        .get();
+    const magnets = [];
 
-    if (magnet_uris.length > 0) {
-        log.info(`Found ${magnet_uris.length} magnet links for "${raw_title}"`);
-        const thread_hash = generateThreadHash(raw_title, magnet_uris);
+    // FIX: Instead of just getting the href, we get the magnet link element
+    // and its surrounding context, which is more reliable.
+    $(magnetSelector).each((index, element) => {
+        const magnetEl = $(element);
+        const uri = magnetEl.attr('href');
+
+        // Heuristic: Find the closest block-level parent and get its text.
+        // This usually contains the full descriptive title for the magnet.
+        // We look for a div or p tag. If not found, we use the immediate parent.
+        const contextEl = magnetEl.closest('div, p');
+        const context = (contextEl.length ? contextEl : magnetEl.parent()).text().trim();
+
+        if (uri) {
+            magnets.push({ uri, context });
+        }
+    });
+
+    if (magnets.length > 0) {
+        log.info(`Found ${magnets.length} magnet links for "${raw_title}"`);
+        const thread_hash = generateThreadHash(raw_title, magnets);
         
-        await processor({ thread_hash, raw_title, magnet_uris });
+        await processor({ thread_hash, raw_title, magnets });
     } else {
-        // FIX: The crawlee logger uses `log.warning()`, not `log.warn()`.
         log.warning(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
+
 
 const runCrawler = async (processor) => {
     const crawler = createCrawler(processor);
