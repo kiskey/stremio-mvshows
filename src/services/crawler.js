@@ -10,7 +10,7 @@ const generateThreadHash = (title, magnetUris) => {
     return crypto.createHash('sha256').update(data).digest('hex');
 };
 
-const createCrawler = (processor) => {
+const createCrawler = (crawledData) => {
     return new CheerioCrawler({
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
@@ -21,9 +21,12 @@ const createCrawler = (processor) => {
 
             switch (label) {
                 case 'LIST':
-                    return handleListPage(context);
+                    await handleListPage(context);
+                    break;
                 case 'DETAIL':
-                    return handleDetailPage(context, processor);
+                    // FIX: Instead of calling a processor, we just push the results to an array
+                    await handleDetailPage(context, crawledData); 
+                    break;
                 default:
                     log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
@@ -56,14 +59,12 @@ async function handleListPage({ $, log, crawler }) {
     }
 }
 
-async function handleDetailPage({ $, request, log }, processor) {
+async function handleDetailPage({ $, request, log }, crawledData) {
     const { userData } = request;
     const { raw_title } = userData;
 
     log.info(`Processing DETAIL page for: "${raw_title}"`);
 
-    // FIX: Revert to only grabbing the magnet URI itself.
-    // The parser will now use the 'dn' parameter, which is more reliable.
     const magnetSelector = 'a[href^="magnet:?"]';
     const magnet_uris = $(magnetSelector)
         .map((i, el) => $(el).attr('href'))
@@ -73,15 +74,19 @@ async function handleDetailPage({ $, request, log }, processor) {
         log.info(`Found ${magnet_uris.length} magnet links for "${raw_title}"`);
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         
-        await processor({ thread_hash, raw_title, magnet_uris });
+        // FIX: Add the raw scraped data to our results array
+        crawledData.push({ thread_hash, raw_title, magnet_uris });
     } else {
         log.warning(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
 
-const runCrawler = async (processor) => {
-    const crawler = createCrawler(processor);
+const runCrawler = async () => {
+    // FIX: This function now collects and returns data instead of processing it.
+    const crawledData = [];
+    const crawler = createCrawler(crawledData);
+    
     const startRequests = [];
     const baseUrl = config.forumUrl.replace(/\/$/, '');
 
@@ -98,13 +103,13 @@ const runCrawler = async (processor) => {
     logger.info({
         startPage: config.scrapeStartPage,
         endPage: config.scrapeEndPage,
-        concurrency: config.scraperConcurrency,
-        maxRetries: config.scraperRetryCount,
         urls: startRequests.map(r => r.url)
     }, `Starting crawl of ${startRequests.length} pages.`);
     
     await crawler.run(startRequests);
-    logger.info("Crawl run has completed.");
+    
+    logger.info(`Crawl run has completed. Scraped ${crawledData.length} total threads.`);
+    return crawledData;
 };
 
 module.exports = { runCrawler };
