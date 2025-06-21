@@ -5,6 +5,7 @@ const config = require('../config/config');
 const { models } = require('../database/connection');
 const crud = require('../database/crud');
 const { Op } = require('sequelize');
+const logger = require('../utils/logger'); // Import logger for better debugging
 
 // --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
@@ -14,7 +15,6 @@ const sortStreamsByQuality = (a, b) => {
     return qualityA - qualityB;
 };
 
-// --- CORRECTED MANIFEST ---
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
@@ -27,29 +27,19 @@ router.get('/manifest.json', (req, res) => {
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
-            name: 'TamilMV WebSeries',
-            // FIX: Declare support for the 'skip' parameter for pagination
-            // This tells Stremio that it can send requests like /skip=100.json
-            "extra": [
-              {
-                "name": "skip",
-                "isRequired": false
-              }
-            ]
+            name: 'Forum TV Shows',
+            extra: [{ "name": "skip", "isRequired": false }]
         }],
         behaviorHints: { configurable: false, adult: false }
     };
     res.json(manifest);
 });
 
-// This route correctly handles both initial and paginated catalog requests.
-// e.g., /catalog/series/top-series-from-forum.json
-// e.g., /catalog/series/top-series-from-forum/skip=100.json
+// --- CORRECTED CATALOG HANDLER ---
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
 
-    // Correctly parse the skip value from the optional 'extra' parameter
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || 0);
     }
@@ -58,25 +48,37 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Not Found' });
     }
 
-    const limit = 100; // The number of items per page
+    const limit = 100; // Stremio's typical page size, can be adjusted
 
     try {
-        const metas = await models.TmdbMetadata.findAll({
+        // FIX: The query now originates from the 'Thread' model, which represents our actual catalog entries.
+        const threads = await models.Thread.findAll({
             where: {
-                imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } 
+                status: 'linked', // Only show threads that have been successfully linked to metadata
+                tmdb_id: { [Op.ne]: null }
             },
+            // Include the associated metadata from the other table
+            include: [{
+                model: models.TmdbMetadata,
+                where: {
+                    imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' }
+                },
+                required: true // This makes it an INNER JOIN
+            }],
             limit: limit,
             offset: skip,
-            order: [['createdAt', 'DESC']],
-            raw: true
+            order: [['updatedAt', 'DESC']], // Order by the last time the thread was seen/updated
         });
         
-        const stremioMetas = metas.map(meta => {
-            const parsedData = JSON.parse(meta.data); 
+        // Map the result to the Stremio meta object format
+        const stremioMetas = threads.map(thread => {
+            const tmdbData = thread.TmdbMetadata.data; // Access the joined data
+            const parsedData = (typeof tmdbData === 'string') ? JSON.parse(tmdbData) : tmdbData;
+
             return {
-                id: meta.imdb_id,
+                id: thread.TmdbMetadata.imdb_id, // Use the IMDb ID for Stremio
                 type: 'series',
-                name: parsedData.title,
+                name: thread.clean_title, // Use the title from the thread for more specificity (e.g., includes season)
                 poster: parsedData.poster_path 
                     ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
                     : null,
@@ -84,11 +86,13 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         });
 
         res.json({ metas: stremioMetas });
+
     } catch (error) {
         logger.error(error, "Failed to fetch catalog data.");
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
+
 
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
