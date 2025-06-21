@@ -48,7 +48,7 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Not Found' });
     }
 
-    const limit = 100;
+    const limit = 25;
 
     try {
         // FIX: The query now correctly originates from the 'TmdbMetadata' model.
