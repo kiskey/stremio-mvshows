@@ -4,9 +4,9 @@ const crypto = require('crypto');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 
-const generateThreadHash = (title, magnets) => {
-    const magnetUris = magnets.sort().join('');
-    const data = title + magnetUris;
+const generateThreadHash = (title, magnetUris) => {
+    const magnetData = magnetUris.sort().join('');
+    const data = title + magnetData;
     return crypto.createHash('sha256').update(data).digest('hex');
 };
 
@@ -73,7 +73,6 @@ async function handleDetailPage({ $, request, log }, processor) {
         log.info(`Found ${magnet_uris.length} magnet links for "${raw_title}"`);
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         
-        // Pass the raw URIs to the orchestrator
         await processor({ thread_hash, raw_title, magnet_uris });
     } else {
         log.warning(`No magnet links found on detail page for "${raw_title}"`);
