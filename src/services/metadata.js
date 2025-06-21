@@ -5,22 +5,13 @@ const config = require('../config/config');
 
 const tmdbApi = axios.create({
     baseURL: 'https://api.themoviedb.org/3',
-    params: {
-        api_key: config.tmdbApiKey,
-    },
-    timeout: 5000 // 5-second timeout for API calls
+    params: { api_key: config.tmdbApiKey },
+    timeout: 5000
 });
 
-/**
- * Searches TMDB for a movie or TV show by title and year.
- * @param {string} title - The clean title of the show/movie.
- * @param {number} year - The release year.
- * @returns {Promise<Object|null>} - The formatted TMDB data or null if not found.
- */
 const getTmdbMetadata = async (title, year) => {
     logger.debug(`Searching TMDB for: "${title}" (${year})`);
     
-    // Attempt 1: Search with title and year (highest accuracy)
     try {
         const response = await tmdbApi.get('/search/multi', {
             params: { query: title, first_air_date_year: year, year: year },
@@ -35,13 +26,9 @@ const getTmdbMetadata = async (title, year) => {
         logger.error({ err: error.message }, `TMDB API error on primary search for "${title}"`);
     }
 
-    // Attempt 2: Fallback to title-only search
     logger.warn(`No TMDB match with year. Retrying with title only for: "${title}"`);
     try {
-        const response = await tmdbApi.get('/search/multi', {
-            params: { query: title },
-        });
-
+        const response = await tmdbApi.get('/search/multi', { params: { query: title } });
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
             logger.info(`TMDB fallback match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
@@ -55,26 +42,26 @@ const getTmdbMetadata = async (title, year) => {
     return null;
 };
 
-/**
- * Fetches TMDB data using a specific IMDb or TMDB ID.
- * @param {string} id - The ID string (e.g., "tt12345" or "tmdb:67890").
- * @returns {Promise<Object|null>}
- */
+// FIX: Rewritten to properly handle tt... and type:id formats
 const getTmdbMetadataById = async (id) => {
     try {
         let result;
         if (id.startsWith('tt')) {
             logger.debug(`Looking up by IMDb ID: ${id}`);
             const findResponse = await tmdbApi.get(`/find/${id}`, { params: { external_source: 'imdb_id' } });
+            // The /find endpoint returns a list in a category, e.g., tv_results
             result = findResponse.data.tv_results[0] || findResponse.data.movie_results[0];
-        } else if (id.startsWith('tmdb:')) {
+        } else if (id.includes(':')) {
             const [type, tmdbId] = id.split(':');
             logger.debug(`Looking up by TMDB ID: ${tmdbId} (Type: ${type})`);
-            if (type !== 'tv' && type !== 'movie') { throw new Error('Invalid type in tmdb:id'); }
+            if (type !== 'tv' && type !== 'movie') {
+                logger.error(`Invalid type in manual ID: ${type}`);
+                return null;
+            }
             const findResponse = await tmdbApi.get(`/${type}/${tmdbId}`);
             result = findResponse.data;
         } else {
-            logger.error(`Invalid manual ID format provided: ${id}`);
+            logger.error(`Invalid manual ID format provided: ${id}. Must be 'tt...' or 'tv:...' or 'movie:...'.`);
             return null;
         }
 
@@ -87,11 +74,6 @@ const getTmdbMetadataById = async (id) => {
     return null;
 };
 
-/**
- * Takes a raw TMDB result and enriches it (e.g., gets IMDb ID) and formats for our DB.
- * @param {Object} tmdbResult - A single result object from the TMDB API.
- * @returns {Promise<Object>} - An object containing the formatted data for storage.
- */
 const formatTmdbData = async (tmdbResult) => {
     let imdb_id = null;
     const media_type = tmdbResult.media_type || (tmdbResult.first_air_date ? 'tv' : 'movie');
@@ -107,7 +89,7 @@ const formatTmdbData = async (tmdbResult) => {
         dbEntry: {
             tmdb_id: tmdbResult.id.toString(),
             imdb_id: imdb_id,
-            data: { // This is the JSON blob stored in the database
+            data: {
                 media_type: media_type,
                 title: tmdbResult.title || tmdbResult.name,
                 poster_path: tmdbResult.poster_path,
