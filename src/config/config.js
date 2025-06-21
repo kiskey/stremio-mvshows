@@ -17,8 +17,8 @@ const config = {
 
     // Stremio Manifest
     addonId: 'org.stremio.torrent.nodejs.example',
-    addonName: 'NodeJS Torrent Addon',
-    addonDescription: 'A Stremio addon providing streams from a forum using Node.js.',
+    addonName: 'TamilMV WebSeries Addon',
+    addonDescription: 'A Stremio addon providing streams from a TamilMV torrent forum.',
     addonVersion: '1.0.0',
 
     trackers: [
