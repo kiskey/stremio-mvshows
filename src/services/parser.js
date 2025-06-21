@@ -3,12 +3,13 @@ const ptt = require('parse-torrent-title');
 const logger = require('../utils/logger');
 
 /**
- * Expands a numeric range from a string.
- * e.g., "01-08" returns [1, 2, 3, 4, 5, 6, 7, 8]
- * @param {string} rangeStr The string range.
+ * Expands a numeric range from a string, handling multiple formats.
+ * e.g., "01-22" or "(01-22)" or "17-20"
+ * @param {string} rangeStr The string containing the range.
  * @returns {number[]} An array of numbers.
  */
 function expandEpisodeRange(rangeStr) {
+    // This regex is more robust, capturing ranges with or without parens, and with different separators.
     const match = rangeStr.match(/(\d{1,3})[–-]\s*(\d{1,3})/);
     if (!match) return [];
     
@@ -25,84 +26,64 @@ function expandEpisodeRange(rangeStr) {
 }
 
 /**
- * Attempts to parse a thread title using pre-cleaning, PTT, and regex fallbacks.
+ * Attempts to parse a thread title using ptt, with pre-cleaning.
  * @param {string} rawTitle The raw title from the forum.
  * @returns {object|null} An object with { clean_title, year } or null.
  */
 function parseTitle(rawTitle) {
-    // 1. Pre-clean the title to remove common forum junk
     const cleanedForPtt = rawTitle
-        .replace(/By\s[\w\s.]+,.*$/i, '') // Remove "By User, 13 hours ago..."
+        .replace(/By\s[\w\s.-]+,.*$/i, '')
         .trim();
 
-    // 2. Try PTT on the cleaned title
     const pttResult = ptt.parse(cleanedForPtt);
 
     if (pttResult.title && pttResult.year) {
         logger.info({ ptt_result: pttResult }, `PTT successfully parsed title: ${rawTitle}`);
         return { clean_title: pttResult.title, year: pttResult.year };
     }
-
-    // 3. PTT Fallback Logic
-    logger.warn(`PTT failed. Attempting regex fallback for: "${rawTitle}"`);
-    let clean_title = null;
-    let year = null;
     
-    const yearMatch = rawTitle.match(/\b(20[0-2]\d)\b/); // More specific year range
-    if (yearMatch) {
-        year = parseInt(yearMatch[0], 10);
-    }
-    
-    const titleMatch = rawTitle.match(/^(.+?)(?:\(\d{4}\))/);
-    if (titleMatch) {
-        clean_title = titleMatch[1].replace(/[._]/g, ' ').trim();
-    }
-    
-    if (clean_title && year) {
-        logger.info({ clean_title, year }, 'Regex fallback succeeded.');
-        return { clean_title, year };
-    }
-    
-    logger.error(`All parsing attempts failed for title: "${rawTitle}"`);
+    logger.error(`PTT parsing failed for title: "${rawTitle}"`);
     return null;
 }
 
 /**
- * Parses magnet context or URI to extract stream metadata, including episode ranges.
+ * Parses a magnet URI to extract stream metadata. It relies on the magnet's 'dn' parameter.
  * @param {string} magnetUri The full magnet URI.
- * @param {string} contextText The text surrounding the magnet link.
  * @returns {object|null} An object with stream metadata or null.
  */
-function parseMagnet(magnetUri, contextText) {
+function parseMagnet(magnetUri) {
     try {
         const params = new URLSearchParams(magnetUri.split('?')[1]);
         const infohash = params.get('xt')?.replace('urn:btih:', '');
+        // FIX: Prioritize the 'dn' (display name) parameter as the source of truth.
+        const filename = decodeURIComponent(params.get('dn') || '');
+
         if (!infohash) {
             logger.warn('Magnet URI missing infohash (xt parameter)');
             return null;
         }
 
-        // Prioritize the contextual text from the page, fall back to magnet's display name (dn).
-        const textToParse = contextText || params.get('dn') || '';
-        
-        const pttResult = ptt.parse(textToParse);
+        if (!filename) {
+            logger.warn({ magnetUri }, 'Magnet URI missing display name (dn parameter), cannot parse.');
+            return null;
+        }
+
+        const pttResult = ptt.parse(filename);
         
         let episodes = [];
         
-        // Custom Regex for Episode Ranges, which PTT doesn't handle well.
-        // Looks for patterns like EP (01-22), EP (01-06), EP(01-06), S02 EP (17-20)
-        const rangeMatch = textToParse.match(/EP\s*\(?(\d{1,3}[–-]\d{1,3})\)?/i);
+        // Regex for Episode Ranges: EP (01-22), EP(01-06), EP 17-20
+        const rangeMatch = filename.match(/EP\s?\(?(\d{1,3}[–-]\d{1,3})\)?/i);
 
         if (rangeMatch && rangeMatch[1]) {
             episodes = expandEpisodeRange(rangeMatch[1]);
-            logger.info({ range: rangeMatch[1], count: episodes.length }, `Expanded episode range from magnet text.`);
+            logger.info({ range: rangeMatch[1], count: episodes.length }, `Expanded episode range.`);
         } else if (pttResult.episode) {
-            // Fallback to PTT's single episode result
             episodes = [pttResult.episode];
         }
 
         if (!pttResult.season || episodes.length === 0) {
-            logger.warn({ textToParse }, 'PTT failed to find required season/episode in magnet text.');
+            logger.warn({ filename }, 'PTT failed to find required season/episode in magnet dn.');
             return null;
         }
 
@@ -111,7 +92,8 @@ function parseMagnet(magnetUri, contextText) {
             season: pttResult.season,
             episodes: episodes,
             quality: pttResult.resolution || 'SD',
-            language: pttResult.language || 'Unknown',
+            // Default to 'multi' if language is not found, as it's common in these titles.
+            language: pttResult.language || 'multi',
         };
     } catch (e) {
         const shortMagnet = magnetUri.substring(0, 70);
