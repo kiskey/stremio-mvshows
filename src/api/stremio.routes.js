@@ -7,7 +7,6 @@ const crud = require('../database/crud');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 
-// --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
     const qualityA = qualityOrder[a.quality] || 99;
@@ -35,7 +34,6 @@ router.get('/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// --- DEFINITIVELY CORRECTED CATALOG HANDLER ---
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
@@ -48,18 +46,21 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Not Found' });
     }
 
-    const limit = 25;
+    const limit = 100;
 
     try {
-        // FIX: The query now correctly originates from the 'TmdbMetadata' model.
-        // This ensures one unique entry per show, which is the correct behavior for a catalog.
         const metas = await models.TmdbMetadata.findAll({
             where: {
                 imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' }
             },
             limit: limit,
             offset: skip,
-            order: [['updatedAt', 'DESC']], // Order by when the show was last updated in our DB
+            // FIX: Implement the requested sorting order.
+            // Order by year descending, and treat null years as last.
+            order: [
+                ['year', 'DESC NULLS LAST'],
+                ['createdAt', 'DESC'] // Secondary sort for items with the same year
+            ],
             raw: true
         });
         
