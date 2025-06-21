@@ -18,7 +18,7 @@ module.exports = (sequelize) => {
         },
         status: { 
             type: DataTypes.STRING, 
-            defaultValue: 'linked', // 'linked', 'pending_tmdb', 'failed_parse'
+            defaultValue: 'linked',
             allowNull: false
         },
         magnet_uris: {
@@ -36,7 +36,7 @@ module.exports = (sequelize) => {
     
     const Stream = sequelize.define('Stream', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        tmdb_id: { type: DataTypes.STRING, allowNull: false, index: true },
+        tmdb_id: { type: DataTypes.STRING, allowNull: false },
         season: { type: DataTypes.INTEGER, allowNull: false },
         episode: { type: DataTypes.INTEGER, allowNull: false },
         infohash: { type: DataTypes.STRING, allowNull: false },
@@ -45,7 +45,11 @@ module.exports = (sequelize) => {
     }, { 
         tableName: 'streams', 
         timestamps: false,
-        indexes: [{ unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] }]
+        // FIX: The UNIQUE constraint must be on the combination of these fields, not just one.
+        indexes: [{ 
+            unique: true, 
+            fields: ['tmdb_id', 'season', 'episode', 'infohash'] 
+        }]
     });
 
     const FailedThread = sequelize.define('FailedThread', {
@@ -55,7 +59,5 @@ module.exports = (sequelize) => {
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'failed_threads', timestamps: false });
     
-    // REMOVED: LlmLog model is no longer needed.
-
     return { Thread, TmdbMetadata, Stream, FailedThread };
 };
