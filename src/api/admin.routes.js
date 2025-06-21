@@ -1,7 +1,6 @@
 // src/api/admin.routes.js
 const express = require('express');
 const router = express.Router();
-// FIX: Import the cache functions from orchestrator
 const { runFullWorkflow, getDashboardCache, updateDashboardCache } = require('../services/orchestrator'); 
 const { models } = require('../database/connection');
 const metadata = require('../services/metadata');
@@ -9,15 +8,15 @@ const parser = require('../services/parser');
 const crud = require('../database/crud');
 const logger = require('../utils/logger');
 
+// Endpoint to manually trigger the crawling and processing workflow
 router.post('/trigger-crawl', (req, res) => {
     runFullWorkflow();
     res.status(202).json({ message: "Crawl workflow triggered successfully. Check logs for progress." });
 });
 
-// FIX: This endpoint now reads from the fast in-memory cache instead of querying the DB.
+// Endpoint to get statistics for the dashboard UI
 router.get('/dashboard', async (req, res) => {
     const cachedStats = getDashboardCache();
-    // If cache hasn't been populated yet, populate it once.
     if (!cachedStats.lastUpdated) {
         await updateDashboardCache();
         return res.json(getDashboardCache());
@@ -25,6 +24,7 @@ router.get('/dashboard', async (req, res) => {
     res.json(cachedStats);
 });
 
+// Endpoint to get the list of threads pending a TMDB match
 router.get('/pending', async (req, res) => {
     try {
         const pendingThreads = await models.Thread.findAll({
@@ -38,6 +38,22 @@ router.get('/pending', async (req, res) => {
     }
 });
 
+// --- NEW ENDPOINT TO VIEW FAILURES ---
+// Endpoint to get the list of threads that failed parsing critically.
+router.get('/failures', async (req, res) => {
+    try {
+        const failedThreads = await models.FailedThread.findAll({
+            order: [['last_attempt', 'DESC']],
+        });
+        res.json(failedThreads);
+    } catch (error) {
+        logger.error(error, "Failed to fetch critical failures.");
+        res.status(500).json({ message: "Error fetching critical failures." });
+    }
+});
+// --- END NEW ENDPOINT ---
+
+// Endpoint to manually rescue a pending thread with a correct ID
 router.post('/rescue', async (req, res) => {
     const { threadId, manualId } = req.body;
     if (!threadId || !manualId) {
@@ -50,7 +66,6 @@ router.post('/rescue', async (req, res) => {
             return res.status(404).json({ message: 'Pending thread not found.' });
         }
 
-        // FIX: Correctly call the metadata service which now handles the tv: prefix
         const tmdbData = await metadata.getTmdbMetadataById(manualId);
         if (!tmdbData) {
             return res.status(400).json({ message: `Could not find a match for ID: ${manualId}` });
@@ -69,7 +84,7 @@ router.post('/rescue', async (req, res) => {
                     streamsToCreate.push({
                         tmdb_id: tmdbData.dbEntry.tmdb_id,
                         season: streamDetails.season,
-                        episode,
+                        episode: episode,
                         infohash: streamDetails.infohash,
                         quality: streamDetails.quality,
                         language: streamDetails.language,
@@ -82,7 +97,6 @@ router.post('/rescue', async (req, res) => {
         thread.magnet_uris = null;
         await thread.save();
         
-        // After a successful rescue, update the cache
         await updateDashboardCache();
 
         res.json({ message: `Successfully linked "${thread.clean_title}" and created ${streamsToCreate.length} streams.` });
