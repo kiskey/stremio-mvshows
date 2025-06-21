@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
 # Set the working directory for subsequent commands
 WORKDIR /app
 
-# Create a dedicated directory for persistent data (for the SQLite DB)
+# Create a dedicated directory for persistent data. This is where the volume will be mounted.
 RUN mkdir /data
 
-# --- FIX: Copy the 'public' directory containing the admin UI into the image ---
+# Copy the 'public' directory containing the admin UI into the image
 COPY public/ ./public/
 
 # Copy package files and install production dependencies
