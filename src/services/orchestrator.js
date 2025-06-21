@@ -8,8 +8,38 @@ const { models } = require('../database/connection');
 
 let isCrawling = false;
 
+// --- NEW: Caching mechanism for dashboard stats ---
+let dashboardCache = {
+    linked: 0,
+    pending: 0,
+    failed: 0,
+    lastUpdated: null,
+};
+
+/**
+ * Updates the in-memory dashboard statistics.
+ * This should be called after any major data change (e.g., after a crawl).
+ */
+async function updateDashboardCache() {
+    try {
+        logger.info('Updating dashboard cache...');
+        const linked = await models.Thread.count({ where: { status: 'linked' } });
+        const pending = await models.Thread.count({ where: { status: 'pending_tmdb' } });
+        const failed = await models.FailedThread.count();
+        dashboardCache = { linked, pending, failed, lastUpdated: new Date() };
+        logger.info({ cache: dashboardCache }, 'Dashboard cache updated successfully.');
+    } catch (error) {
+        logger.error(error, 'Failed to update dashboard cache.');
+    }
+}
+
+function getDashboardCache() {
+    return dashboardCache;
+}
+// --- END: Caching mechanism ---
+
 const processThread = async (threadData) => {
-    const { thread_hash, raw_title, magnet_uris } = threadData; 
+    const { thread_hash, raw_title, magnet_uris } = threadData;
 
     try {
         const existingThread = await models.Thread.findOne({ where: { raw_title } });
@@ -53,7 +83,6 @@ const processThread = async (threadData) => {
 
             const streamsToCreate = [];
             for (const magnet_uri of magnet_uris) {
-                // FIX: Call the simplified parser with just the URI
                 const streamDetails = parser.parseMagnet(magnet_uri); 
                 if (streamDetails && streamDetails.episodes.length > 0) {
                     for (const episode of streamDetails.episodes) {
@@ -105,8 +134,10 @@ const runFullWorkflow = async () => {
         logger.error(error, "The crawling workflow encountered a fatal error.");
     } finally {
         isCrawling = false;
+        // FIX: Update the cache after the crawl is complete.
+        await updateDashboardCache();
         logger.info("✅ Workflow finished.");
     }
 };
 
-module.exports = { runFullWorkflow, isCrawling };
+module.exports = { runFullWorkflow, isCrawling, updateDashboardCache, getDashboardCache };
