@@ -8,29 +8,23 @@ module.exports = (sequelize) => {
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
         year: DataTypes.INTEGER,
-        
-        // FIX: The `references.model` property must be the actual table name (string)
-        // not the capitalized model object name. This fixes the "no such table" error.
         tmdb_id: { 
             type: DataTypes.STRING, 
             references: { 
-                model: 'tmdb_metadata', // Changed from 'TmdbMetadata'
+                model: 'tmdb_metadata',
                 key: 'tmdb_id' 
             }, 
             allowNull: true 
         },
-        
         status: { 
             type: DataTypes.STRING, 
             defaultValue: 'linked', // 'linked', 'pending_tmdb', 'failed_parse'
             allowNull: false
         },
-        
         magnet_uris: {
             type: DataTypes.JSON,
             allowNull: true
         },
-        
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'threads', timestamps: true });
 
@@ -60,14 +54,8 @@ module.exports = (sequelize) => {
         reason: DataTypes.STRING,
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'failed_threads', timestamps: false });
+    
+    // REMOVED: LlmLog model is no longer needed.
 
-    const LlmLog = sequelize.define('LlmLog', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        timestamp: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-        source: DataTypes.STRING, // "title" or "magnet"
-        input_prompt: DataTypes.TEXT,
-        llm_response: DataTypes.TEXT,
-    }, { tableName: 'llm_logs', timestamps: false });
-
-    return { Thread, TmdbMetadata, Stream, FailedThread, LlmLog };
+    return { Thread, TmdbMetadata, Stream, FailedThread };
 };
