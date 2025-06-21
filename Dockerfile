@@ -1,9 +1,7 @@
 # Use an official Node.js runtime as a parent image
 FROM node:20-slim
 
-# --- FIX: Install procps which contains the 'ps' command needed by Crawlee ---
-# First, update the package lists, then install procps without extra prompts.
-# Finally, clean up the apt cache to keep the image size down.
+# Install procps which contains the 'ps' command needed by Crawlee
 RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory for subsequent commands
@@ -11,6 +9,9 @@ WORKDIR /app
 
 # Create a dedicated directory for persistent data (for the SQLite DB)
 RUN mkdir /data
+
+# --- FIX: Copy the 'public' directory containing the admin UI into the image ---
+COPY public/ ./public/
 
 # Copy package files and install production dependencies
 COPY package*.json ./
