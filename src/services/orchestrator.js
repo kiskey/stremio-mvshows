@@ -9,8 +9,8 @@ const { models } = require('../database/connection');
 let isCrawling = false;
 
 const processThread = async (threadData) => {
-    // FIX: Receive `magnets` as an array of objects
-    const { thread_hash, raw_title, magnets } = threadData; 
+    // FIX: Receive raw magnet uris
+    const { thread_hash, raw_title, magnet_uris } = threadData; 
 
     try {
         const existingThread = await models.Thread.findOne({ where: { raw_title } });
@@ -53,9 +53,9 @@ const processThread = async (threadData) => {
             });
 
             const streamsToCreate = [];
-            // FIX: Loop through the new magnet objects
-            for (const magnet of magnets) {
-                const streamDetails = parser.parseMagnet(magnet.uri, magnet.context);
+            // FIX: Pass the URI directly to the simplified magnet parser
+            for (const magnet_uri of magnet_uris) {
+                const streamDetails = parser.parseMagnet(magnet_uri);
                 if (streamDetails && streamDetails.episodes.length > 0) {
                     for (const episode of streamDetails.episodes) {
                         streamsToCreate.push({
@@ -76,8 +76,6 @@ const processThread = async (threadData) => {
 
         } else {
             logger.warn(`No TMDB match for "${parsedTitle.clean_title}". Saving as 'pending_tmdb'.`);
-            // FIX: Pass the raw magnet URIs for storage
-            const magnetUrisForStorage = magnets.map(m => m.uri);
             await crud.createOrUpdateThread({
                 thread_hash,
                 raw_title,
@@ -85,7 +83,7 @@ const processThread = async (threadData) => {
                 year: parsedTitle.year,
                 tmdb_id: null,
                 status: 'pending_tmdb',
-                magnet_uris: magnetUrisForStorage,
+                magnet_uris: magnet_uris, // Store raw magnet URIs
             });
         }
     } catch (error) {
