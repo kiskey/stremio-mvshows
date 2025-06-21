@@ -9,7 +9,6 @@ const { models } = require('../database/connection');
 let isCrawling = false;
 
 const processThread = async (threadData) => {
-    // FIX: Receive raw magnet uris
     const { thread_hash, raw_title, magnet_uris } = threadData; 
 
     try {
@@ -53,9 +52,9 @@ const processThread = async (threadData) => {
             });
 
             const streamsToCreate = [];
-            // FIX: Pass the URI directly to the simplified magnet parser
             for (const magnet_uri of magnet_uris) {
-                const streamDetails = parser.parseMagnet(magnet_uri);
+                // FIX: Call the simplified parser with just the URI
+                const streamDetails = parser.parseMagnet(magnet_uri); 
                 if (streamDetails && streamDetails.episodes.length > 0) {
                     for (const episode of streamDetails.episodes) {
                         streamsToCreate.push({
@@ -83,7 +82,7 @@ const processThread = async (threadData) => {
                 year: parsedTitle.year,
                 tmdb_id: null,
                 status: 'pending_tmdb',
-                magnet_uris: magnet_uris, // Store raw magnet URIs
+                magnet_uris: magnet_uris,
             });
         }
     } catch (error) {
