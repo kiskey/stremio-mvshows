@@ -3,38 +3,43 @@ const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
     const Thread = sequelize.define('Thread', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true }, // Add a simple ID for easy reference
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
         year: DataTypes.INTEGER,
-        tmdb_id: { type: DataTypes.STRING, references: { model: 'TmdbMetadata', key: 'tmdb_id' }, allowNull: true }, // Allow NULL for pending
         
-        // NEW: Status to track the state of the thread
+        // FIX: The `references.model` property must be the actual table name (string)
+        // not the capitalized model object name. This fixes the "no such table" error.
+        tmdb_id: { 
+            type: DataTypes.STRING, 
+            references: { 
+                model: 'tmdb_metadata', // Changed from 'TmdbMetadata'
+                key: 'tmdb_id' 
+            }, 
+            allowNull: true 
+        },
+        
         status: { 
             type: DataTypes.STRING, 
             defaultValue: 'linked', // 'linked', 'pending_tmdb', 'failed_parse'
             allowNull: false
         },
         
-        // NEW: Store magnets here for pending threads so we can re-process them later
         magnet_uris: {
             type: DataTypes.JSON,
             allowNull: true
         },
         
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'threads', timestamps: true }); // Enable timestamps for better sorting
-
+    }, { tableName: 'threads', timestamps: true });
 
     const TmdbMetadata = sequelize.define('TmdbMetadata', {
         tmdb_id: { type: DataTypes.STRING, primaryKey: true },
         imdb_id: { type: DataTypes.STRING, unique: true },
         data: { type: DataTypes.JSON, allowNull: false },
-    }, { tableName: 'tmdb_metadata', timestamps: false });
+    }, { tableName: 'tmdb_metadata', timestamps: true });
     
-    // No imdb_mapping table needed; imdb_id is in TmdbMetadata
-
     const Stream = sequelize.define('Stream', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         tmdb_id: { type: DataTypes.STRING, allowNull: false, index: true },
