@@ -14,12 +14,10 @@ const createCrawler = (processor) => {
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
 
-        // This is the core of the new logic. It handles different page types.
         async requestHandler(context) {
             const { request, log } = context;
-            const { label, userData } = request;
+            const { label } = request;
 
-            // Route the logic based on the page type (label)
             switch (label) {
                 case 'LIST':
                     return handleListPage(context);
@@ -32,12 +30,13 @@ const createCrawler = (processor) => {
     });
 };
 
-// --- HANDLER FOR THE MAIN FORUM PAGES (e.g., /page/1) ---
 async function handleListPage({ $, request, log, crawler }) {
     log.info(`Processing LIST page: ${request.url}`);
 
-    // This selector is based on your HTML snippet for the link to a detail page.
-    const detailLinkSelector = 'h4.ipsDataItem_title a';
+    // FIX: Make the selector more specific to only target the main topic link.
+    // This looks for an <a> tag directly inside a <span> with class 'ipsType_break',
+    // which is inside the h4. This excludes other links like pagination.
+    const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
     const newRequests = [];
     $(detailLinkSelector).each((index, element) => {
@@ -47,8 +46,6 @@ async function handleListPage({ $, request, log, crawler }) {
 
         if (url && raw_title) {
             log.debug(`Found topic: "${raw_title}"`);
-            // Add the detail page to the queue.
-            // Pass the title along using userData so we have it on the detail page.
             newRequests.push({
                 url: url,
                 label: 'DETAIL',
@@ -63,10 +60,9 @@ async function handleListPage({ $, request, log, crawler }) {
     }
 }
 
-// --- HANDLER FOR THE TOPIC DETAIL PAGES ---
 async function handleDetailPage({ $, request, log }, processor) {
     const { userData } = request;
-    const { raw_title } = userData; // Retrieve the title passed from the list page.
+    const { raw_title } = userData;
 
     log.info(`Processing DETAIL page for: "${raw_title}"`);
 
@@ -79,18 +75,15 @@ async function handleDetailPage({ $, request, log }, processor) {
         log.info(`Found ${magnet_uris.length} magnet links for "${raw_title}"`);
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         
-        // We now have all the data needed. Call the orchestrator's processor function.
         await processor({ thread_hash, raw_title, magnet_uris });
     } else {
-        log.warn(`No magnet links found on detail page for "${raw_title}"`);
+        // FIX: The crawlee logger uses `log.warning()`, not `log.warn()`.
+        log.warning(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
-
 const runCrawler = async (processor) => {
     const crawler = createCrawler(processor);
-
-    // Generate the initial list of forum pages to visit
     const startRequests = [];
     const baseUrl = config.forumUrl.replace(/\/$/, '');
 
@@ -101,15 +94,17 @@ const runCrawler = async (processor) => {
         } else {
             url = `${baseUrl}/page/${i}`;
         }
-        // These are all 'LIST' pages.
         startRequests.push({ url, label: 'LIST' });
     }
 
     logger.info({
-        ...config, // Log all config for easy debugging
-        startRequestCount: startRequests.length,
-    }, `Starting crawl...`);
-
+        startPage: config.scrapeStartPage,
+        endPage: config.scrapeEndPage,
+        concurrency: config.scraperConcurrency,
+        maxRetries: config.scraperRetryCount,
+        urls: startRequests.map(r => r.url)
+    }, `Starting crawl of ${startRequests.length} pages.`);
+    
     await crawler.run(startRequests);
     logger.info("Crawl run has completed.");
 };
