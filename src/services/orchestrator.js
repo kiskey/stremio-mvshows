@@ -8,16 +8,11 @@ const { models } = require('../database/connection');
 
 let isCrawling = false;
 
-/**
- * Processes a single thread scraped from the forum.
- * This is the core logic that decides whether to create, update, or skip an item.
- * @param {object} threadData - Contains raw_title, magnet_uris, and thread_hash.
- */
 const processThread = async (threadData) => {
-    const { thread_hash, raw_title, magnet_uris } = threadData;
+    // FIX: Receive `magnets` as an array of objects
+    const { thread_hash, raw_title, magnets } = threadData; 
 
     try {
-        // Find if a thread with this *title* already exists to detect updates
         const existingThread = await models.Thread.findOne({ where: { raw_title } });
 
         if (existingThread) {
@@ -27,26 +22,21 @@ const processThread = async (threadData) => {
                 return;
             } else {
                 logger.info(`Thread content has changed. Re-processing: ${raw_title}`);
-                // Destroying the old record simplifies the logic. The new record will be created.
-                // Streams associated with the old metadata will eventually become orphaned but won't be served.
                 await existingThread.destroy();
             }
         }
         
         logger.info(`Processing new or updated thread: ${raw_title}`);
 
-        // 1. Normalize Title using the parser service
-        const parsedTitle = await parser.parseTitle(raw_title);
+        const parsedTitle = parser.parseTitle(raw_title);
         if (!parsedTitle) {
             await crud.logFailedThread(thread_hash, raw_title, 'Title parsing failed critically.');
             return;
         }
 
-        // 2. TMDB Lookup using the metadata service
         const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year);
 
         if (tmdbData && tmdbData.dbEntry) {
-            // --- SUCCESS PATH: A TMDB match was found ---
             const { dbEntry } = tmdbData;
             logger.info(`TMDB match found for "${parsedTitle.clean_title}": ${dbEntry.tmdb_id}`);
             
@@ -59,13 +49,13 @@ const processThread = async (threadData) => {
                 year: parsedTitle.year,
                 tmdb_id: dbEntry.tmdb_id,
                 status: 'linked',
-                magnet_uris: null // Magnets will be processed, no need to store them
+                magnet_uris: null
             });
 
-            // 3. Parse Magnets and create stream records
             const streamsToCreate = [];
-            for (const magnet of magnet_uris) {
-                const streamDetails = await parser.parseMagnet(magnet);
+            // FIX: Loop through the new magnet objects
+            for (const magnet of magnets) {
+                const streamDetails = parser.parseMagnet(magnet.uri, magnet.context);
                 if (streamDetails && streamDetails.episodes.length > 0) {
                     for (const episode of streamDetails.episodes) {
                         streamsToCreate.push({
@@ -85,8 +75,9 @@ const processThread = async (threadData) => {
             }
 
         } else {
-            // --- FAILURE PATH: No TMDB match found, save as 'pending' ---
             logger.warn(`No TMDB match for "${parsedTitle.clean_title}". Saving as 'pending_tmdb'.`);
+            // FIX: Pass the raw magnet URIs for storage
+            const magnetUrisForStorage = magnets.map(m => m.uri);
             await crud.createOrUpdateThread({
                 thread_hash,
                 raw_title,
@@ -94,7 +85,7 @@ const processThread = async (threadData) => {
                 year: parsedTitle.year,
                 tmdb_id: null,
                 status: 'pending_tmdb',
-                magnet_uris: magnet_uris, // Store magnets for later rescue
+                magnet_uris: magnetUrisForStorage,
             });
         }
     } catch (error) {
@@ -102,10 +93,6 @@ const processThread = async (threadData) => {
     }
 };
 
-/**
- * The main workflow function that runs the crawler.
- * It includes a flag to prevent multiple crawls from running simultaneously.
- */
 const runFullWorkflow = async () => {
     if (isCrawling) {
         logger.warn("Crawl is already in progress. Skipping this trigger.");
