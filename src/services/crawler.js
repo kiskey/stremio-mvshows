@@ -5,8 +5,7 @@ const logger = require('../utils/logger');
 const config = require('../config/config');
 
 const generateThreadHash = (title, magnets) => {
-    // Hash now uses only the magnet URIs for consistency
-    const magnetUris = magnets.map(m => m.uri).sort().join('');
+    const magnetUris = magnets.sort().join('');
     const data = title + magnetUris;
     return crypto.createHash('sha256').update(data).digest('hex');
 };
@@ -63,31 +62,19 @@ async function handleDetailPage({ $, request, log }, processor) {
 
     log.info(`Processing DETAIL page for: "${raw_title}"`);
 
+    // FIX: Revert to only grabbing the magnet URI itself.
+    // The parser will now use the 'dn' parameter, which is more reliable.
     const magnetSelector = 'a[href^="magnet:?"]';
-    const magnets = [];
+    const magnet_uris = $(magnetSelector)
+        .map((i, el) => $(el).attr('href'))
+        .get();
 
-    // FIX: Instead of just getting the href, we get the magnet link element
-    // and its surrounding context, which is more reliable.
-    $(magnetSelector).each((index, element) => {
-        const magnetEl = $(element);
-        const uri = magnetEl.attr('href');
-
-        // Heuristic: Find the closest block-level parent and get its text.
-        // This usually contains the full descriptive title for the magnet.
-        // We look for a div or p tag. If not found, we use the immediate parent.
-        const contextEl = magnetEl.closest('div, p');
-        const context = (contextEl.length ? contextEl : magnetEl.parent()).text().trim();
-
-        if (uri) {
-            magnets.push({ uri, context });
-        }
-    });
-
-    if (magnets.length > 0) {
-        log.info(`Found ${magnets.length} magnet links for "${raw_title}"`);
-        const thread_hash = generateThreadHash(raw_title, magnets);
+    if (magnet_uris.length > 0) {
+        log.info(`Found ${magnet_uris.length} magnet links for "${raw_title}"`);
+        const thread_hash = generateThreadHash(raw_title, magnet_uris);
         
-        await processor({ thread_hash, raw_title, magnets });
+        // Pass the raw URIs to the orchestrator
+        await processor({ thread_hash, raw_title, magnet_uris });
     } else {
         log.warning(`No magnet links found on detail page for "${raw_title}"`);
     }
