@@ -42,21 +42,18 @@ const getTmdbMetadata = async (title, year) => {
     return null;
 };
 
-// FIX: Rewritten to properly handle tt... and type:id formats
 const getTmdbMetadataById = async (id) => {
     try {
         let result;
         if (id.startsWith('tt')) {
             logger.debug(`Looking up by IMDb ID: ${id}`);
             const findResponse = await tmdbApi.get(`/find/${id}`, { params: { external_source: 'imdb_id' } });
-            // The /find endpoint returns a list in a category, e.g., tv_results
             result = findResponse.data.tv_results[0] || findResponse.data.movie_results[0];
         } else if (id.includes(':')) {
             const [type, tmdbId] = id.split(':');
             logger.debug(`Looking up by TMDB ID: ${tmdbId} (Type: ${type})`);
             if (type !== 'tv' && type !== 'movie') {
-                logger.error(`Invalid type in manual ID: ${type}`);
-                return null;
+                logger.error(`Invalid type in manual ID: ${type}`); return null;
             }
             const findResponse = await tmdbApi.get(`/${type}/${tmdbId}`);
             result = findResponse.data;
@@ -64,10 +61,7 @@ const getTmdbMetadataById = async (id) => {
             logger.error(`Invalid manual ID format provided: ${id}. Must be 'tt...' or 'tv:...' or 'movie:...'.`);
             return null;
         }
-
-        if (result) {
-            return await formatTmdbData(result);
-        }
+        if (result) { return await formatTmdbData(result); }
     } catch (error) {
         logger.error({ err: error.message }, `TMDB API error during manual lookup for ID: ${id}`);
     }
@@ -85,10 +79,15 @@ const formatTmdbData = async (tmdbResult) => {
         logger.warn(`Could not fetch external IDs for TMDB ID ${tmdbResult.id}.`);
     }
 
+    const release_date = tmdbResult.release_date || tmdbResult.first_air_date;
+    const year = release_date ? parseInt(release_date.substring(0, 4), 10) : null;
+
     return {
         dbEntry: {
             tmdb_id: tmdbResult.id.toString(),
             imdb_id: imdb_id,
+            // FIX: Add the parsed year to the database entry
+            year: year,
             data: {
                 media_type: media_type,
                 title: tmdbResult.title || tmdbResult.name,
@@ -100,7 +99,4 @@ const formatTmdbData = async (tmdbResult) => {
     };
 };
 
-module.exports = {
-    getTmdbMetadata,
-    getTmdbMetadataById,
-};
+module.exports = { getTmdbMetadata, getTmdbMetadataById };
