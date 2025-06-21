@@ -10,10 +10,7 @@ module.exports = (sequelize) => {
         year: DataTypes.INTEGER,
         tmdb_id: { 
             type: DataTypes.STRING, 
-            references: { 
-                model: 'tmdb_metadata',
-                key: 'tmdb_id' 
-            }, 
+            references: { model: 'tmdb_metadata', key: 'tmdb_id' }, 
             allowNull: true 
         },
         status: { 
@@ -21,10 +18,7 @@ module.exports = (sequelize) => {
             defaultValue: 'linked',
             allowNull: false
         },
-        magnet_uris: {
-            type: DataTypes.JSON,
-            allowNull: true
-        },
+        magnet_uris: { type: DataTypes.JSON, allowNull: true },
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'threads', timestamps: true });
 
@@ -45,7 +39,7 @@ module.exports = (sequelize) => {
     }, { 
         tableName: 'streams', 
         timestamps: false,
-        // FIX: The UNIQUE constraint must be on the combination of these fields, not just one.
+        // FIX: This is the final, correct constraint for a stream.
         indexes: [{ 
             unique: true, 
             fields: ['tmdb_id', 'season', 'episode', 'infohash'] 
