@@ -1,5 +1,5 @@
 // src/services/crawler.js
-const { CheerioCrawler, Configuration } = require('crawlee');
+const { CheerioCrawler } = require('crawlee');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const config = require('../config/config');
@@ -11,15 +11,12 @@ const generateThreadHash = (title, magnetUris) => {
 };
 
 const createCrawler = (crawledData) => {
+    // FIX: Removed the invalid 'persistRequestQueue' property.
+    // The default behavior without a named queue is to run fresh every time.
     return new CheerioCrawler({
         navigationTimeoutSecs: 60,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
-        // --- FIX: This is the critical change. ---
-        // We disable the persistent queue to ensure that on every run,
-        // the crawler re-visits all specified pages. It will not remember
-        // and skip URLs from previous runs.
-        persistRequestQueue: false,
 
         async requestHandler(context) {
             const { request, log } = context;
