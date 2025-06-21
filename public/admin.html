@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stremio Addon Admin</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #5a5a5a; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+        .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        .stat { font-size: 2em; font-weight: bold; color: #007bff; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; }
+        button:hover { background-color: #0056b3; }
+        #pending-list { list-style-type: none; padding: 0; }
+        #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+        #pending-list li:hover { background-color: #f0f8ff; }
+        textarea, input { width: 95%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Stremio Addon Admin Panel</h1>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Dashboard</h2>
+                <p>Total Linked Series: <span id="total-linked" class="stat">0</span></p>
+                <p>Pending TMDB Match: <span id="total-pending" class="stat">0</span></p>
+                <p>Critical Parse Failures: <span id="total-failed" class="stat">0</span></p>
+            </div>
+            <div class="card">
+                <h2>Actions</h2>
+                <button id="trigger-crawl">Trigger Manual Crawl</button>
+                <p id="action-status" style="margin-top: 10px;"></p>
+            </div>
+        </div>
+
+        <h2 style="margin-top: 40px;">Rescue Pending Series</h2>
+        <div class="grid">
+            <div class="card">
+                <h3>1. Select a Pending Title</h3>
+                <ul id="pending-list"></ul>
+            </div>
+            <div class="card">
+                <h3>2. Provide Manual ID and Rescue</h3>
+                <form id="rescue-form">
+                    <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
+                    <input type="hidden" id="thread-id-input">
+                    <label for="manual-id">Enter Correct IMDb ID (tt...) or TMDB ID (tmdb:...):</label>
+                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tmdb:94997" required>
+                    <br><br>
+                    <button type="submit">Rescue & Rematch</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const apiBase = '/admin';
+    const totalLinkedEl = document.getElementById('total-linked');
+    const totalPendingEl = document.getElementById('total-pending');
+    const totalFailedEl = document.getElementById('total-failed');
+    const pendingListEl = document.getElementById('pending-list');
+    const actionStatusEl = document.getElementById('action-status');
+    const triggerCrawlBtn = document.getElementById('trigger-crawl');
+    const rescueForm = document.getElementById('rescue-form');
+    const selectedTitleEl = document.getElementById('selected-title');
+    const threadIdInput = document.getElementById('thread-id-input');
+    const manualIdInput = document.getElementById('manual-id');
+
+    async function fetchDashboard() {
+        const response = await fetch(`${apiBase}/dashboard`);
+        const data = await response.json();
+        totalLinkedEl.textContent = data.linked;
+        totalPendingEl.textContent = data.pending;
+        totalFailedEl.textContent = data.failed;
+    }
+
+    async function fetchPending() {
+        const response = await fetch(`${apiBase}/pending`);
+        const data = await response.json();
+        pendingListEl.innerHTML = '';
+        if (data.length === 0) {
+            pendingListEl.innerHTML = '<li>No pending series. Good job!</li>';
+        }
+        data.forEach(thread => {
+            const li = document.createElement('li');
+            li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
+            li.dataset.threadId = thread.id;
+            li.dataset.title = thread.clean_title;
+            li.onclick = () => {
+                selectedTitleEl.textContent = li.dataset.title;
+                threadIdInput.value = li.dataset.threadId;
+                manualIdInput.focus();
+            };
+            pendingListEl.appendChild(li);
+        });
+    }
+    
+    triggerCrawlBtn.onclick = async () => {
+        actionStatusEl.textContent = 'Triggering crawl...';
+        const response = await fetch(`${apiBase}/trigger-crawl`, { method: 'POST' });
+        const data = await response.json();
+        actionStatusEl.textContent = data.message;
+        setTimeout(() => actionStatusEl.textContent = '', 5000);
+    };
+
+    rescueForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const threadId = threadIdInput.value;
+        const manualId = manualIdInput.value;
+        if (!threadId || !manualId) {
+            alert('Please select a title and enter an ID.');
+            return;
+        }
+        actionStatusEl.textContent = `Rescuing thread ${threadId}...`;
+        const response = await fetch(`${apiBase}/rescue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ threadId: parseInt(threadId), manualId })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            actionStatusEl.textContent = data.message;
+            fetchDashboard();
+            fetchPending();
+            rescueForm.reset();
+            selectedTitleEl.textContent = 'None';
+        } else {
+            actionStatusEl.textContent = `Error: ${data.message}`;
+        }
+    };
+
+    // Initial load
+    fetchDashboard();
+    fetchPending();
+});
+</script>
+</body>
+</html>
