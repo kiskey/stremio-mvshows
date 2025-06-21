@@ -7,7 +7,7 @@ module.exports = (sequelize) => {
         thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
-        year: DataTypes.INTEGER,
+        year: DataTypes.INTEGER, // We keep this for parsing reference, but the canonical year is in TmdbMetadata
         tmdb_id: { 
             type: DataTypes.STRING, 
             references: { model: 'tmdb_metadata', key: 'tmdb_id' }, 
@@ -25,6 +25,8 @@ module.exports = (sequelize) => {
     const TmdbMetadata = sequelize.define('TmdbMetadata', {
         tmdb_id: { type: DataTypes.STRING, primaryKey: true },
         imdb_id: { type: DataTypes.STRING, unique: true },
+        // FIX: Add the year column for proper sorting
+        year: { type: DataTypes.INTEGER, index: true },
         data: { type: DataTypes.JSON, allowNull: false },
     }, { tableName: 'tmdb_metadata', timestamps: true });
     
@@ -39,7 +41,6 @@ module.exports = (sequelize) => {
     }, { 
         tableName: 'streams', 
         timestamps: false,
-        // FIX: This is the final, correct constraint for a stream.
         indexes: [{ 
             unique: true, 
             fields: ['tmdb_id', 'season', 'episode', 'infohash'] 
