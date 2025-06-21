@@ -9,7 +9,6 @@ const logger = require('../utils/logger');
  * @returns {number[]} An array of numbers.
  */
 function expandEpisodeRange(rangeStr) {
-    // This regex is more robust, capturing ranges with or without parens, and with different separators.
     const match = rangeStr.match(/(\d{1,3})[–-]\s*(\d{1,3})/);
     if (!match) return [];
     
@@ -26,7 +25,7 @@ function expandEpisodeRange(rangeStr) {
 }
 
 /**
- * Attempts to parse a thread title using ptt, with pre-cleaning.
+ * Parses a thread title using PTT after cleaning it.
  * @param {string} rawTitle The raw title from the forum.
  * @returns {object|null} An object with { clean_title, year } or null.
  */
@@ -47,7 +46,7 @@ function parseTitle(rawTitle) {
 }
 
 /**
- * Parses a magnet URI to extract stream metadata. It relies on the magnet's 'dn' parameter.
+ * Parses a magnet URI's 'dn' parameter to extract stream metadata.
  * @param {string} magnetUri The full magnet URI.
  * @returns {object|null} An object with stream metadata or null.
  */
@@ -55,35 +54,36 @@ function parseMagnet(magnetUri) {
     try {
         const params = new URLSearchParams(magnetUri.split('?')[1]);
         const infohash = params.get('xt')?.replace('urn:btih:', '');
-        // FIX: Prioritize the 'dn' (display name) parameter as the source of truth.
-        const filename = decodeURIComponent(params.get('dn') || '');
-
-        if (!infohash) {
-            logger.warn('Magnet URI missing infohash (xt parameter)');
-            return null;
-        }
-
+        
+        let filename = params.get('dn') || '';
         if (!filename) {
-            logger.warn({ magnetUri }, 'Magnet URI missing display name (dn parameter), cannot parse.');
+            logger.warn({ magnetUri }, 'Magnet URI missing display name (dn parameter).');
             return null;
         }
 
-        const pttResult = ptt.parse(filename);
+        filename = decodeURIComponent(filename);
+
+        // FIX: Pre-clean the filename by removing the leading domain.
+        const cleanedFilename = filename.replace(/^www\.\w+\.\w+\s*-\s*/, '').trim();
+
+        const pttResult = ptt.parse(cleanedFilename);
         
         let episodes = [];
         
         // Regex for Episode Ranges: EP (01-22), EP(01-06), EP 17-20
-        const rangeMatch = filename.match(/EP\s?\(?(\d{1,3}[–-]\d{1,3})\)?/i);
+        const rangeMatch = cleanedFilename.match(/EP\s?\(?(\d{1,3}[–-]\d{1,3})\)?/i);
 
         if (rangeMatch && rangeMatch[1]) {
             episodes = expandEpisodeRange(rangeMatch[1]);
-            logger.info({ range: rangeMatch[1], count: episodes.length }, `Expanded episode range.`);
+            if (episodes.length > 0) {
+                 logger.info({ range: rangeMatch[1], count: episodes.length }, `Expanded episode range.`);
+            }
         } else if (pttResult.episode) {
             episodes = [pttResult.episode];
         }
 
         if (!pttResult.season || episodes.length === 0) {
-            logger.warn({ filename }, 'PTT failed to find required season/episode in magnet dn.');
+            logger.warn({ filename: cleanedFilename }, 'PTT failed to find required season/episode in magnet dn.');
             return null;
         }
 
@@ -92,7 +92,6 @@ function parseMagnet(magnetUri) {
             season: pttResult.season,
             episodes: episodes,
             quality: pttResult.resolution || 'SD',
-            // Default to 'multi' if language is not found, as it's common in these titles.
             language: pttResult.language || 'multi',
         };
     } catch (e) {
