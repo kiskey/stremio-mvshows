@@ -1,7 +1,7 @@
 # Use an official Node.js runtime as a parent image
 FROM node:20-slim
 
-# Install procps which contains the 'ps' command needed by Crawlee
+# Install procps which contains the 'ps' command needed by Crawlee for memory monitoring
 RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory for subsequent commands
