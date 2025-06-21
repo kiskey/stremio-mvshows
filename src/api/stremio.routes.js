@@ -14,6 +14,7 @@ const sortStreamsByQuality = (a, b) => {
     return qualityA - qualityB;
 };
 
+// --- CORRECTED MANIFEST ---
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
@@ -26,17 +27,29 @@ router.get('/manifest.json', (req, res) => {
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
-            name: 'Forum TV Shows'
+            name: 'TamilMV WebSeries',
+            // FIX: Declare support for the 'skip' parameter for pagination
+            // This tells Stremio that it can send requests like /skip=100.json
+            "extra": [
+              {
+                "name": "skip",
+                "isRequired": false
+              }
+            ]
         }],
         behaviorHints: { configurable: false, adult: false }
     };
     res.json(manifest);
 });
 
+// This route correctly handles both initial and paginated catalog requests.
+// e.g., /catalog/series/top-series-from-forum.json
+// e.g., /catalog/series/top-series-from-forum/skip=100.json
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
 
+    // Correctly parse the skip value from the optional 'extra' parameter
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || 0);
     }
@@ -45,34 +58,36 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Not Found' });
     }
 
-    const limit = 100;
+    const limit = 100; // The number of items per page
 
-    const metas = await models.TmdbMetadata.findAll({
-        where: {
-            imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } 
-        },
-        limit: limit,
-        offset: skip,
-        order: [['createdAt', 'DESC']],
-        raw: true
-    });
-    
-    // FIX: Properly parse the 'data' JSON string and construct the poster URL.
-    const stremioMetas = metas.map(meta => {
-        // The 'data' column is a stringified JSON, so we must parse it first.
-        const parsedData = JSON.parse(meta.data); 
+    try {
+        const metas = await models.TmdbMetadata.findAll({
+            where: {
+                imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } 
+            },
+            limit: limit,
+            offset: skip,
+            order: [['createdAt', 'DESC']],
+            raw: true
+        });
+        
+        const stremioMetas = metas.map(meta => {
+            const parsedData = JSON.parse(meta.data); 
+            return {
+                id: meta.imdb_id,
+                type: 'series',
+                name: parsedData.title,
+                poster: parsedData.poster_path 
+                    ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
+                    : null,
+            };
+        });
 
-        return {
-            id: meta.imdb_id,
-            type: 'series',
-            name: parsedData.title, // Use the title from the parsed data
-            poster: parsedData.poster_path 
-                ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
-                : null, // Construct the full URL if poster_path exists
-        };
-    });
-
-    res.json({ metas: stremioMetas });
+        res.json({ metas: stremioMetas });
+    } catch (error) {
+        logger.error(error, "Failed to fetch catalog data.");
+        res.status(500).json({ err: 'Internal Server Error' });
+    }
 });
 
 router.get('/stream/:type/:id.json', async (req, res) => {
