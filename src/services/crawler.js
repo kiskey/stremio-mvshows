@@ -12,10 +12,14 @@ const generateThreadHash = (title, magnetUris) => {
 
 const createCrawler = (crawledData) => {
     return new CheerioCrawler({
-        // FIX: Increase the navigation timeout to better handle slow network/server responses.
-        navigationTimeoutSecs: 60, 
+        navigationTimeoutSecs: 60,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
+        // --- FIX: This is the critical change. ---
+        // We disable the persistent queue to ensure that on every run,
+        // the crawler re-visits all specified pages. It will not remember
+        // and skip URLs from previous runs.
+        persistRequestQueue: false,
 
         async requestHandler(context) {
             const { request, log } = context;
@@ -32,7 +36,6 @@ const createCrawler = (crawledData) => {
                     log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
-        // FIX: Add a dedicated error handler for better logging
         failedRequestHandler({ request, log }) {
             log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url,
@@ -54,7 +57,7 @@ async function handleListPage({ $, log, crawler }) {
         }
     });
     if (newRequests.length > 0) {
-        log.info(`Enqueuing ${newRequests.length} detail pages from ${crawler.running_request.url}`);
+        log.info(`Enqueuing ${newRequests.length} detail pages from list page.`);
         await crawler.addRequests(newRequests);
     }
 }
@@ -64,6 +67,7 @@ async function handleDetailPage({ $, request, log }, crawledData) {
     const { raw_title } = userData;
     const magnetSelector = 'a[href^="magnet:?"]';
     const magnet_uris = $(magnetSelector).map((i, el) => $(el).attr('href')).get();
+
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris });
@@ -77,18 +81,21 @@ const runCrawler = async () => {
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     const baseUrl = config.forumUrl.replace(/\/$/, '');
+
     for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
         let url = i === 1 ? baseUrl : `${baseUrl}/page/${i}`;
         startRequests.push({ url, label: 'LIST' });
     }
+
     logger.info({
         startPage: config.scrapeStartPage,
         endPage: config.scrapeEndPage,
         urls: startRequests.map(r => r.url)
-    }, `Starting crawl of ${startRequests.length} pages.`);
+    }, `Starting fresh crawl of ${startRequests.length} pages.`);
     
     await crawler.run(startRequests);
-    logger.info(`Crawl run has completed. Scraped ${crawledData.length} total threads.`);
+    
+    logger.info(`Crawl run has completed. Scraped ${crawledData.length} total threads with magnets.`);
     return crawledData;
 };
 
