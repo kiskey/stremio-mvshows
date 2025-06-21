@@ -7,16 +7,20 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
         .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #5a5a5a; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+        h1, h2 { color: #5a5a5a; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 40px; }
         .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
         .stat { font-size: 2em; font-weight: bold; color: #007bff; }
         button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; }
         button:hover { background-color: #0056b3; }
-        #pending-list { list-style-type: none; padding: 0; }
-        #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+        #pending-list { list-style-type: none; padding: 0; max-height: 300px; overflow-y: auto; }
+        #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
         #pending-list li:hover { background-color: #f0f8ff; }
         textarea, input { width: 95%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
+        th { background-color: #007bff; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
         .hidden { display: none; }
     </style>
 </head>
@@ -56,16 +60,36 @@
                 </form>
             </div>
         </div>
+
+        <!-- NEW SECTION for failures -->
+        <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
+        <div class="card">
+            <p>These threads failed basic title parsing and could not be processed at all. They should be investigated on the source forum.</p>
+            <table id="failures-table">
+                <thead>
+                    <tr>
+                        <th>Failed Title</th>
+                        <th>Reason</th>
+                        <th>Last Attempt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Failure data will be inserted here by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+        <!-- END NEW SECTION -->
+
     </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-    // FIX: All API calls now go to the /admin/api/ namespace
     const apiBase = '/admin/api'; 
     const totalLinkedEl = document.getElementById('total-linked');
     const totalPendingEl = document.getElementById('total-pending');
     const totalFailedEl = document.getElementById('total-failed');
     const pendingListEl = document.getElementById('pending-list');
+    const failuresTableBody = document.querySelector('#failures-table tbody');
     const actionStatusEl = document.getElementById('action-status');
     const triggerCrawlBtn = document.getElementById('trigger-crawl');
     const rescueForm = document.getElementById('rescue-form');
@@ -99,6 +123,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 manualIdInput.focus();
             };
             pendingListEl.appendChild(li);
+        });
+    }
+
+    // NEW FUNCTION to fetch and display failures
+    async function fetchFailures() {
+        const response = await fetch(`${apiBase}/failures`);
+        const data = await response.json();
+        failuresTableBody.innerHTML = '';
+        if (data.length === 0) {
+            failuresTableBody.innerHTML = '<tr><td colspan="3">No critical failures found.</td></tr>';
+        }
+        data.forEach(failure => {
+            const row = document.createElement('tr');
+            const lastAttempt = new Date(failure.last_attempt).toLocaleString();
+            row.innerHTML = `
+                <td>${failure.raw_title}</td>
+                <td>${failure.reason}</td>
+                <td>${lastAttempt}</td>
+            `;
+            failuresTableBody.appendChild(row);
         });
     }
     
@@ -139,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial load
     fetchDashboard();
     fetchPending();
+    fetchFailures(); // Call the new function on load
 });
 </script>
 </body>
