@@ -4,10 +4,10 @@ const router = express.Router();
 const config = require('../config/config');
 const { models } = require('../database/connection');
 const crud = require('../database/crud');
+const parser = require('../services/parser');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 
-// --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
     const qualityA = qualityOrder[a.quality] || 99;
@@ -15,14 +15,12 @@ const sortStreamsByQuality = (a, b) => {
     return qualityA - qualityB;
 };
 
-// --- CORRECTED MANIFEST ---
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
         version: config.addonVersion,
         name: config.addonName,
         description: config.addonDescription,
-        // FIX: Add 'meta' to the list of supported resources
         resources: ['catalog', 'stream', 'meta'], 
         types: ['series'], 
         idPrefixes: ['tt', config.addonId], 
@@ -40,102 +38,70 @@ router.get('/manifest.json', (req, res) => {
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
-
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || 0);
     }
-
     if (type !== 'series' || id !== 'top-series-from-forum') {
         return res.status(404).json({ err: 'Not Found' });
     }
-
     const limit = 100;
-
     try {
         const linkedMetasPromise = models.TmdbMetadata.findAll({
             where: { imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } },
             order: [['year', 'DESC NULLS LAST'], ['updatedAt', 'DESC']],
             raw: true
         });
-
         const pendingThreadsPromise = models.Thread.findAll({
             where: { status: 'pending_tmdb' },
             order: [['updatedAt', 'DESC']],
         });
-
         const [linkedMetasRaw, pendingThreads] = await Promise.all([linkedMetasPromise, pendingThreadsPromise]);
-
         const linkedMetas = linkedMetasRaw.map(meta => {
             const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
             return {
-                id: meta.imdb_id,
-                type: 'series',
-                name: parsedData.title,
-                poster: parsedData.poster_path 
-                    ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
-                    : null,
+                id: meta.imdb_id, type: 'series', name: parsedData.title,
+                poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
             };
         });
-        
         const pendingMetas = pendingThreads.map(thread => ({
-            id: `${config.addonId}:${thread.id}`,
-            type: 'series',
-            name: `[PENDING] ${thread.clean_title}`,
-            poster: thread.custom_poster || config.placeholderPoster, 
+            id: `${config.addonId}:${thread.id}`, type: 'series', name: `[PENDING] ${thread.clean_title}`,
+            poster: thread.custom_poster || config.placeholderPoster,
             description: thread.custom_description || `This item is pending an official metadata match.`
         }));
-
         const allMetas = [...linkedMetas, ...pendingMetas];
         const paginatedMetas = allMetas.slice(skip, skip + limit);
-
         res.json({ metas: paginatedMetas });
-
     } catch (error) {
         logger.error(error, "Failed to fetch catalog data.");
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
 
-// --- NEW META HANDLER ---
-// This endpoint responds when Stremio asks for details about one of our custom IDs.
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
-
-    // We only serve metadata for our custom series IDs
     if (type !== 'series' || !id.startsWith(config.addonId)) {
         return res.status(404).json({ err: 'Not Found' });
     }
-
     try {
         const threadId = id.split(':')[1];
         const thread = await models.Thread.findByPk(threadId);
-
         if (!thread || thread.status !== 'pending_tmdb') {
             return res.status(404).json({ err: 'Pending item not found' });
         }
-
-        // Construct the full meta object Stremio expects
         const metaObject = {
-            id: id,
-            type: 'series',
-            name: thread.clean_title,
+            id: id, type: 'series', name: thread.clean_title,
             poster: thread.custom_poster || config.placeholderPoster,
             description: thread.custom_description || 'Metadata is pending for this item. Streams may be available.',
             releaseInfo: thread.year ? thread.year.toString() : '',
-            // You can add more fields here if you choose to store them
-            // genres: ['Unknown'],
-            // runtime: 'N/A'
         };
-
         res.json({ meta: metaObject });
-
     } catch (error) {
         logger.error(error, `Failed to fetch meta for ID: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
 
-
+// --- DEFINITIVELY CORRECTED STREAM HANDLER ---
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
@@ -143,32 +109,42 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     
     const requestedId = req.params.id;
     let streams = [];
-    let season, episode;
 
     try {
         if (requestedId.startsWith('tt')) {
-            const [imdb_id_part, season_part, episode_part] = requestedId.split(':');
-            season = season_part; episode = episode_part;
+            // --- IMDb ID Logic (for linked items) ---
+            const [imdb_id_part, season, episode] = requestedId.split(':');
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id_part }});
             if (meta) {
-                streams = await crud.findStreams(meta.tmdb_id, season, episode);
+                const dbStreams = await crud.findStreams(meta.tmdb_id, season, episode);
+                streams = dbStreams.map(s => ({...s, episode})); // Ensure episode num is correct
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            const [customIdPart, season_part, episode_part] = requestedId.split(':');
-            season = season_part; episode = episode_part;
-            const threadId = customIdPart.split(':')[1];
-            const thread = await models.Thread.findByPk(threadId);
-            if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
-                for (const magnet_uri of thread.magnet_uris) {
-                    const streamDetails = parser.parseMagnet(magnet_uri);
-                    if (streamDetails && streamDetails.season == season && streamDetails.episodes.includes(parseInt(episode))) {
-                        streams.push(streamDetails);
+            // --- Custom ID Logic (for pending items) ---
+            const threadId = requestedId.split(':')[1];
+            if (threadId) {
+                const thread = await models.Thread.findByPk(threadId);
+                if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
+                    for (const magnet_uri of thread.magnet_uris) {
+                        const streamDetails = parser.parseMagnet(magnet_uri);
+                        if (streamDetails && streamDetails.episodes.length > 0) {
+                            // Create a stream for every single episode found
+                            for (const epNum of streamDetails.episodes) {
+                                streams.push({
+                                    infohash: streamDetails.infohash,
+                                    season: streamDetails.season,
+                                    episode: epNum,
+                                    quality: streamDetails.quality,
+                                    language: streamDetails.language
+                                });
+                            }
+                        }
                     }
                 }
             }
         }
 
-        if (!streams || streams.length === 0) {
+        if (streams.length === 0) {
             return res.json({ streams: [] });
         }
         
@@ -176,8 +152,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
         const streamList = streams.map(s => ({
             infoHash: s.infohash,
-            name: `[TamilMV] - ${s.quality} 📺`,
-            title: `S${String(s.season).padStart(2, '0')}E${String(episode).padStart(2, '0')} | ${s.language} 🎬\n${s.quality}`,
+            name: `[TamilMV] S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')}`,
+            title: `${s.quality} | ${s.language} 🎬`,
             sources: config.trackers
         }));
 
