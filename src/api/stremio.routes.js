@@ -108,55 +108,57 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     }
     
     const requestedId = req.params.id;
-    let streamsData = [];
+    let streamList = [];
 
     try {
         if (requestedId.startsWith('tt')) {
             const [imdb_id, season, episode] = requestedId.split(':');
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
-            if (meta) {
-                // crud.findStreams now returns the full stream objects
-                streamsData = await crud.findStreams(meta.tmdb_id, season, episode);
-            }
+            if (!meta) return res.json({ streams: [] });
+            
+            // FIX: Query for streams where the requested episode falls within the pack range.
+            const dbStreams = await models.Stream.findAll({
+                where: {
+                    tmdb_id: meta.tmdb_id,
+                    season: season,
+                    episode: { [Op.lte]: episode },
+                    episode_end: { [Op.gte]: episode }
+                },
+            });
+            
+            // Use our model's helper method to format the response
+            streamList = dbStreams.map(s => s.toStreamObject());
+
         } else if (requestedId.startsWith(config.addonId)) {
-            const threadId = requestedId.split(':')[1];
-            if (threadId) {
+            const [customIdPart, seasonReq, episodeReq] = requestedId.split(':');
+            if (!seasonReq || !episodeReq) { // Handle request for the list of streams
+                const threadId = customIdPart.split(':')[1];
                 const thread = await models.Thread.findByPk(threadId);
-                if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
+                if (thread && thread.magnet_uris) {
                     for (const magnet_uri of thread.magnet_uris) {
-                        const streamDetails = parser.parseMagnet(magnet_uri);
-                        if (streamDetails && streamDetails.episodes.length > 0) {
-                            for (const epNum of streamDetails.episodes) {
-                                streamsData.push({
-                                    infohash: streamDetails.infohash,
-                                    season: streamDetails.season,
-                                    episode: epNum,
-                                    quality: streamDetails.quality,
-                                    language: streamDetails.language
-                                });
-                            }
-                        }
+                        const parsed = parser.parseMagnet(magnet_uri);
+                        if (!parsed) continue;
+
+                        let title = `[PENDING] S${String(parsed.season).padStart(2, '0')}`;
+                        if (parsed.type === 'SEASON_PACK') title += ' Season Pack';
+                        else if (parsed.type === 'EPISODE_PACK') title += ` (E${String(parsed.episodeStart).padStart(2, '0')}-E${String(parsed.episodeEnd).padStart(2, '0')})`;
+                        else if (parsed.type === 'SINGLE_EPISODE') title += `E${String(parsed.episode).padStart(2, '0')}`;
+                        
+                        streamList.push({
+                            infoHash: parsed.infohash, name: `[TamilMV] - ${parsed.quality} 📺`,
+                            title: title, sources: config.trackers
+                        });
                     }
                 }
             }
         }
 
-        if (streamsData.length === 0) {
-            return res.json({ streams: [] });
-        }
-        
-        streamsData.sort(sortStreamsByQuality);
+        // Remove duplicate streams by infohash before sending
+        const uniqueStreams = streamList.filter((stream, index, self) =>
+            index === self.findIndex((s) => s.infoHash === stream.infoHash)
+        );
 
-        // FIX: The formatter now correctly uses the properties from the 's' object
-        // for every item in the streamsData array, ensuring no 'undefined' values.
-        const streamList = streamsData.map(s => ({
-            infoHash: s.infohash,
-            name: `[TamilMV] - ${s.quality} 📺`,
-            title: `S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')} | ${s.language} 🎬\n${s.quality}`,
-            sources: config.trackers
-        }));
-
-        res.json({ streams: streamList });
+        res.json({ streams: uniqueStreams });
 
     } catch (error) {
         logger.error(error, `Failed to get streams for ID: ${requestedId}`);
