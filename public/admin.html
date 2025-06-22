@@ -8,26 +8,27 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
         .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1, h2 { color: #5a5a5a; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 40px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 40px; }
         .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
         .stat { font-size: 2em; font-weight: bold; color: #007bff; }
-        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin-right: 10px; }
         button:hover { background-color: #0056b3; }
-        #pending-list { list-style-type: none; padding: 0; max-height: 300px; overflow-y: auto; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+        #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
         #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
-        #pending-list li:hover { background-color: #f0f8ff; }
-        textarea, input { width: 95%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
+        textarea, input { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
-        .hidden { display: none; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Stremio Addon Admin Panel</h1>
-
+        <!-- Dashboard & Actions Grid -->
         <div class="grid">
             <div class="card">
                 <h2>Dashboard</h2>
@@ -38,152 +39,193 @@
             <div class="card">
                 <h2>Actions</h2>
                 <button id="trigger-crawl">Trigger Manual Crawl</button>
-                <p id="action-status" style="margin-top: 10px;"></p>
+                <p id="action-status" style="margin-top: 10px; font-weight: bold;"></p>
             </div>
         </div>
 
-        <h2 style="margin-top: 40px;">Rescue Pending Series</h2>
+        <!-- Edit/Rescue Section -->
+        <h2 style="margin-top: 40px;">Edit & Rescue Pending Series</h2>
         <div class="grid">
             <div class="card">
                 <h3>1. Select a Pending Title</h3>
                 <ul id="pending-list"></ul>
             </div>
             <div class="card">
-                <h3>2. Provide Manual ID and Rescue</h3>
-                <form id="rescue-form">
+                <h3>2. Edit Metadata or Link Official ID</h3>
+                <form id="edit-form">
                     <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
                     <input type="hidden" id="thread-id-input">
-                    <label for="manual-id">Enter Correct IMDb ID (tt...) or TMDB ID (tv:12345):</label>
-                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997" required>
-                    <br><br>
-                    <button type="submit">Rescue & Rematch</button>
+                    
+                    <label for="custom-poster">Custom Poster URL:</label>
+                    <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
+                    
+                    <label for="custom-description">Custom Description:</label>
+                    <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
+                    
+                    <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
+                    <hr style="margin: 20px 0;">
+
+                    <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
+                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
+                    
+                    <button type="button" id="link-official-btn">Link Official ID</button>
                 </form>
             </div>
         </div>
 
-        <!-- NEW SECTION for failures -->
+        <!-- Failures Section -->
         <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
         <div class="card">
-            <p>These threads failed basic title parsing and could not be processed at all. They should be investigated on the source forum.</p>
             <table id="failures-table">
-                <thead>
-                    <tr>
-                        <th>Failed Title</th>
-                        <th>Reason</th>
-                        <th>Last Attempt</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <!-- Failure data will be inserted here by JavaScript -->
-                </tbody>
+                <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th></tr></thead>
+                <tbody></tbody>
             </table>
         </div>
-        <!-- END NEW SECTION -->
-
     </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     const apiBase = '/admin/api'; 
-    const totalLinkedEl = document.getElementById('total-linked');
-    const totalPendingEl = document.getElementById('total-pending');
-    const totalFailedEl = document.getElementById('total-failed');
-    const pendingListEl = document.getElementById('pending-list');
-    const failuresTableBody = document.querySelector('#failures-table tbody');
-    const actionStatusEl = document.getElementById('action-status');
-    const triggerCrawlBtn = document.getElementById('trigger-crawl');
-    const rescueForm = document.getElementById('rescue-form');
-    const selectedTitleEl = document.getElementById('selected-title');
-    const threadIdInput = document.getElementById('thread-id-input');
-    const manualIdInput = document.getElementById('manual-id');
+    const ui = {
+        totalLinked: document.getElementById('total-linked'),
+        totalPending: document.getElementById('total-pending'),
+        totalFailed: document.getElementById('total-failed'),
+        pendingList: document.getElementById('pending-list'),
+        failuresTableBody: document.querySelector('#failures-table tbody'),
+        actionStatus: document.getElementById('action-status'),
+        triggerCrawlBtn: document.getElementById('trigger-crawl'),
+        selectedTitle: document.getElementById('selected-title'),
+        threadIdInput: document.getElementById('thread-id-input'),
+        customPosterInput: document.getElementById('custom-poster'),
+        customDescriptionInput: document.getElementById('custom-description'),
+        manualIdInput: document.getElementById('manual-id'),
+        updatePendingBtn: document.getElementById('update-pending-btn'),
+        linkOfficialBtn: document.getElementById('link-official-btn'),
+    };
+    let currentPendingData = [];
 
-    async function fetchDashboard() {
-        const response = await fetch(`${apiBase}/dashboard`);
-        const data = await response.json();
-        totalLinkedEl.textContent = data.linked;
-        totalPendingEl.textContent = data.pending;
-        totalFailedEl.textContent = data.failed;
-    }
-
-    async function fetchPending() {
-        const response = await fetch(`${apiBase}/pending`);
-        const data = await response.json();
-        pendingListEl.innerHTML = '';
-        if (data.length === 0) {
-            pendingListEl.innerHTML = '<li>No pending series. Good job!</li>';
-        }
-        data.forEach(thread => {
-            const li = document.createElement('li');
-            li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
-            li.dataset.threadId = thread.id;
-            li.dataset.title = thread.clean_title;
-            li.onclick = () => {
-                selectedTitleEl.textContent = li.dataset.title;
-                threadIdInput.value = li.dataset.threadId;
-                manualIdInput.focus();
-            };
-            pendingListEl.appendChild(li);
-        });
-    }
-
-    // NEW FUNCTION to fetch and display failures
-    async function fetchFailures() {
-        const response = await fetch(`${apiBase}/failures`);
-        const data = await response.json();
-        failuresTableBody.innerHTML = '';
-        if (data.length === 0) {
-            failuresTableBody.innerHTML = '<tr><td colspan="3">No critical failures found.</td></tr>';
-        }
-        data.forEach(failure => {
-            const row = document.createElement('tr');
-            const lastAttempt = new Date(failure.last_attempt).toLocaleString();
-            row.innerHTML = `
-                <td>${failure.raw_title}</td>
-                <td>${failure.reason}</td>
-                <td>${lastAttempt}</td>
-            `;
-            failuresTableBody.appendChild(row);
-        });
-    }
-    
-    triggerCrawlBtn.onclick = async () => {
-        actionStatusEl.textContent = 'Triggering crawl...';
-        const response = await fetch(`${apiBase}/trigger-crawl`, { method: 'POST' });
-        const data = await response.json();
-        actionStatusEl.textContent = data.message;
-        setTimeout(() => actionStatusEl.textContent = '', 5000);
+    const showStatus = (message, isError = false) => {
+        ui.actionStatus.textContent = message;
+        ui.actionStatus.style.color = isError ? 'red' : 'green';
+        setTimeout(() => ui.actionStatus.textContent = '', 7000);
     };
 
-    rescueForm.onsubmit = async (e) => {
-        e.preventDefault();
-        const threadId = threadIdInput.value;
-        const manualId = manualIdInput.value;
-        if (!threadId || !manualId) {
-            alert('Please select a title and enter an ID.');
-            return;
+    async function fetchData(endpoint) {
+        const response = await fetch(`${apiBase}${endpoint}`);
+        if (!response.ok) {
+            showStatus(`Failed to fetch ${endpoint}`, true);
+            return null;
         }
-        actionStatusEl.textContent = `Rescuing thread ${threadId}...`;
-        const response = await fetch(`${apiBase}/rescue`, {
+        return response.json();
+    }
+
+    async function postData(endpoint, body) {
+        const response = await fetch(`${apiBase}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ threadId: parseInt(threadId), manualId })
+            body: JSON.stringify(body)
         });
         const data = await response.json();
-        if (response.ok) {
-            actionStatusEl.textContent = data.message;
-            fetchDashboard();
-            fetchPending();
-            rescueForm.reset();
-            selectedTitleEl.textContent = 'None';
-        } else {
-            actionStatusEl.textContent = `Error: ${data.message}`;
+        showStatus(data.message, !response.ok);
+        return response.ok;
+    }
+
+    async function loadAllData() {
+        const [dashboard, pending, failures] = await Promise.all([
+            fetchData('/dashboard'),
+            fetchData('/pending'),
+            fetchData('/failures')
+        ]);
+        
+        if (dashboard) {
+            ui.totalLinked.textContent = dashboard.linked;
+            ui.totalPending.textContent = dashboard.pending;
+            ui.totalFailed.textContent = dashboard.failed;
+        }
+
+        if (pending) {
+            currentPendingData = pending;
+            ui.pendingList.innerHTML = '';
+            if (pending.length === 0) {
+                ui.pendingList.innerHTML = '<li>No pending series. Good job!</li>';
+            }
+            pending.forEach(thread => {
+                const li = document.createElement('li');
+                li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
+                li.dataset.threadId = thread.id;
+                li.onclick = () => selectPendingItem(thread.id);
+                ui.pendingList.appendChild(li);
+            });
+        }
+        
+        if (failures) {
+            ui.failuresTableBody.innerHTML = '';
+            if (failures.length === 0) {
+                ui.failuresTableBody.innerHTML = '<tr><td colspan="3">No critical failures found.</td></tr>';
+            }
+            failures.forEach(failure => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${failure.raw_title}</td>
+                    <td>${failure.reason}</td>
+                    <td>${new Date(failure.last_attempt).toLocaleString()}</td>
+                `;
+                ui.failuresTableBody.appendChild(row);
+            });
+        }
+    }
+
+    function selectPendingItem(threadId) {
+        const thread = currentPendingData.find(t => t.id === threadId);
+        if (!thread) return;
+
+        // Highlight selected item
+        document.querySelectorAll('#pending-list li').forEach(li => {
+            li.classList.toggle('selected', li.dataset.threadId == threadId);
+        });
+        
+        ui.selectedTitle.textContent = thread.clean_title;
+        ui.threadIdInput.value = thread.id;
+        ui.customPosterInput.value = thread.custom_poster || '';
+        ui.customDescriptionInput.value = thread.custom_description || '';
+        ui.manualIdInput.value = ''; // Clear this field on new selection
+    }
+
+    ui.triggerCrawlBtn.onclick = async () => {
+        showStatus('Triggering crawl...');
+        await postData('/trigger-crawl', {});
+    };
+
+    ui.updatePendingBtn.onclick = async () => {
+        const threadId = ui.threadIdInput.value;
+        if (!threadId) { alert('Please select a title first.'); return; }
+        const success = await postData('/update-pending', {
+            threadId: parseInt(threadId),
+            poster: ui.customPosterInput.value,
+            description: ui.customDescriptionInput.value
+        });
+        if (success) loadAllData();
+    };
+
+    ui.linkOfficialBtn.onclick = async () => {
+        const threadId = ui.threadIdInput.value;
+        const manualId = ui.manualIdInput.value;
+        if (!threadId || !manualId) { alert('Please select a title and enter an official ID.'); return; }
+        const success = await postData('/link-official', {
+            threadId: parseInt(threadId),
+            manualId
+        });
+        if (success) {
+            ui.selectedTitle.textContent = 'None';
+            ui.threadIdInput.value = '';
+            ui.customPosterInput.value = '';
+            ui.customDescriptionInput.value = '';
+            ui.manualIdInput.value = '';
+            loadAllData();
         }
     };
 
-    // Initial load
-    fetchDashboard();
-    fetchPending();
-    fetchFailures(); // Call the new function on load
+    loadAllData();
 });
 </script>
 </body>
