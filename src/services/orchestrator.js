@@ -77,19 +77,38 @@ const runFullWorkflow = async () => {
                 const streamsToCreate = [];
                 for (const magnet_uri of magnet_uris) {
                     const streamDetails = parser.parseMagnet(magnet_uri); 
-                    if (streamDetails && streamDetails.episodes.length > 0) {
-                        for (const episode of streamDetails.episodes) {
-                            streamsToCreate.push({
-                                tmdb_id: dbEntry.tmdb_id, season: streamDetails.season,
-                                episode, infohash: streamDetails.infohash,
-                                quality: streamDetails.quality, language: streamDetails.language,
-                            });
+                    if (streamDetails && streamDetails.season) {
+                        let streamEntry = {
+                            tmdb_id: dbEntry.tmdb_id,
+                            season: streamDetails.season,
+                            infohash: streamDetails.infohash,
+                            quality: streamDetails.quality,
+                            language: streamDetails.language
+                        };
+                        
+                        // FIX: Correctly handle the different pack types from the parser
+                        if (streamDetails.type === 'SEASON_PACK') {
+                            streamEntry.episode = 1; // Represents the whole season
+                            streamEntry.episode_end = 999; // Use a high number to signify 'all episodes'
+                        } else if (streamDetails.type === 'EPISODE_PACK') {
+                            streamEntry.episode = streamDetails.episodeStart;
+                            streamEntry.episode_end = streamDetails.episodeEnd;
+                        } else if (streamDetails.type === 'SINGLE_EPISODE') {
+                            streamEntry.episode = streamDetails.episode;
+                            streamEntry.episode_end = streamDetails.episode; // End is same as start
+                        }
+                        
+                        if (streamEntry.episode) {
+                            streamsToCreate.push(streamEntry);
                         }
                     }
                 }
                 if (streamsToCreate.length > 0) {
-                    await crud.createStreams(streamsToCreate);
-                    logger.info(`Added ${streamsToCreate.length} stream entries for ${parsedTitle.clean_title}`);
+                    // Use bulkCreate with updateOnDuplicate to be more efficient
+                    await models.Stream.bulkCreate(streamsToCreate, {
+                        updateOnDuplicate: ['quality', 'language', 'updatedAt']
+                    });
+                    logger.info(`Upserted ${streamsToCreate.length} stream entries for ${parsedTitle.clean_title}`);
                 }
 
             } else {
