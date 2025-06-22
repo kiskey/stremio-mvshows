@@ -7,7 +7,7 @@ module.exports = (sequelize) => {
         thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
-        year: DataTypes.INTEGER, // We keep this for parsing reference, but the canonical year is in TmdbMetadata
+        year: DataTypes.INTEGER,
         tmdb_id: { 
             type: DataTypes.STRING, 
             references: { model: 'tmdb_metadata', key: 'tmdb_id' }, 
@@ -19,13 +19,18 @@ module.exports = (sequelize) => {
             allowNull: false
         },
         magnet_uris: { type: DataTypes.JSON, allowNull: true },
+        
+        // --- NEW FIELDS for custom pending metadata ---
+        custom_poster: { type: DataTypes.STRING, allowNull: true },
+        custom_description: { type: DataTypes.TEXT, allowNull: true },
+        // --- END NEW FIELDS ---
+        
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'threads', timestamps: true });
 
     const TmdbMetadata = sequelize.define('TmdbMetadata', {
         tmdb_id: { type: DataTypes.STRING, primaryKey: true },
         imdb_id: { type: DataTypes.STRING, unique: true },
-        // FIX: Add the year column for proper sorting
         year: { type: DataTypes.INTEGER, index: true },
         data: { type: DataTypes.JSON, allowNull: false },
     }, { tableName: 'tmdb_metadata', timestamps: true });
