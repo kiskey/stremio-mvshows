@@ -4,10 +4,11 @@ const router = express.Router();
 const config = require('../config/config');
 const { models } = require('../database/connection');
 const crud = require('../database/crud');
-const parser = require('../services/parser');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
+const parser = require('../services/parser');
 
+// --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
     const qualityA = qualityOrder[a.quality] || 99;
@@ -101,7 +102,6 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     }
 });
 
-// --- DEFINITIVELY CORRECTED STREAM HANDLER ---
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
@@ -114,46 +114,65 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         if (requestedId.startsWith('tt')) {
             const [imdb_id, season, episode] = requestedId.split(':');
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
-            if (!meta) return res.json({ streams: [] });
-            
-            // FIX: Query for streams where the requested episode falls within the pack range.
-            const dbStreams = await models.Stream.findAll({
-                where: {
-                    tmdb_id: meta.tmdb_id,
-                    season: season,
-                    episode: { [Op.lte]: episode },
-                    episode_end: { [Op.gte]: episode }
-                },
-            });
-            
-            // Use our model's helper method to format the response
-            streamList = dbStreams.map(s => s.toStreamObject());
-
+            if (meta) {
+                const dbStreams = await models.Stream.findAll({
+                    where: {
+                        tmdb_id: meta.tmdb_id,
+                        season: season,
+                        episode: { [Op.lte]: episode },
+                        episode_end: { [Op.gte]: episode }
+                    },
+                });
+                streamList = dbStreams.map(s => s.toStreamObject());
+            }
         } else if (requestedId.startsWith(config.addonId)) {
             const [customIdPart, seasonReq, episodeReq] = requestedId.split(':');
-            if (!seasonReq || !episodeReq) { // Handle request for the list of streams
-                const threadId = customIdPart.split(':')[1];
+            const season = parseInt(seasonReq);
+            const episode = parseInt(episodeReq);
+            const threadId = customIdPart.split(':')[1];
+            
+            if (threadId && season && episode) { // Ensure we have all parts for a specific stream request
                 const thread = await models.Thread.findByPk(threadId);
-                if (thread && thread.magnet_uris) {
+                if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
                     for (const magnet_uri of thread.magnet_uris) {
                         const parsed = parser.parseMagnet(magnet_uri);
-                        if (!parsed) continue;
+                        if (!parsed || parsed.season !== season) continue;
 
-                        let title = `[PENDING] S${String(parsed.season).padStart(2, '0')}`;
-                        if (parsed.type === 'SEASON_PACK') title += ' Season Pack';
-                        else if (parsed.type === 'EPISODE_PACK') title += ` (E${String(parsed.episodeStart).padStart(2, '0')}-E${String(parsed.episodeEnd).padStart(2, '0')})`;
-                        else if (parsed.type === 'SINGLE_EPISODE') title += `E${String(parsed.episode).padStart(2, '0')}`;
+                        let should_add = false;
+                        let title = '';
+
+                        if (parsed.type === 'SEASON_PACK') {
+                            should_add = true;
+                            title = `[PENDING] Season ${String(parsed.season).padStart(2, '0')} Pack`;
+                        } else if (parsed.type === 'EPISODE_PACK' && episode >= parsed.episodeStart && episode <= parsed.episodeEnd) {
+                            should_add = true;
+                            title = `[PENDING] S${String(parsed.season).padStart(2, '0')} (E${String(parsed.episodeStart).padStart(2, '0')}-E${String(parsed.episodeEnd).padStart(2, '0')})`;
+                        } else if (parsed.type === 'SINGLE_EPISODE' && episode === parsed.episode) {
+                            should_add = true;
+                            title = `[PENDING] S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`;
+                        }
                         
-                        streamList.push({
-                            infoHash: parsed.infohash, name: `[TamilMV] - ${parsed.quality} 📺`,
-                            title: title, sources: config.trackers
-                        });
+                        if (should_add) {
+                            streamList.push({
+                                infoHash: parsed.infohash,
+                                name: `[TamilMV] - ${parsed.quality || 'SD'} 📺`,
+                                title: title,
+                                sources: config.trackers
+                            });
+                        }
                     }
                 }
             }
         }
 
-        // Remove duplicate streams by infohash before sending
+        if (streamList.length === 0) {
+            return res.json({ streams: [] });
+        }
+        
+        // Sort the collected streams by quality
+        streamList.sort(sortStreamsByQuality);
+
+        // Remove duplicate streams by infohash after sorting
         const uniqueStreams = streamList.filter((stream, index, self) =>
             index === self.findIndex((s) => s.infoHash === stream.infoHash)
         );
