@@ -47,23 +47,19 @@ router.get('/failures', async (req, res) => {
     }
 });
 
-// --- NEW ENDPOINT to save custom metadata for a pending item ---
 router.post('/update-pending', async (req, res) => {
     const { threadId, poster, description } = req.body;
     if (!threadId) {
         return res.status(400).json({ message: 'threadId is required.' });
     }
-
     try {
         const thread = await models.Thread.findByPk(threadId);
         if (!thread || thread.status !== 'pending_tmdb') {
             return res.status(404).json({ message: 'Pending thread not found.' });
         }
-        
         thread.custom_poster = poster || null;
         thread.custom_description = description || null;
         await thread.save();
-
         res.json({ message: `Successfully updated pending metadata for "${thread.clean_title}".` });
     } catch (error) {
         logger.error(error, 'Update pending operation failed.');
@@ -71,7 +67,7 @@ router.post('/update-pending', async (req, res) => {
     }
 });
 
-// --- RENAMED & ENHANCED 'rescue' endpoint ---
+// --- DEFINITIVELY CORRECTED 'rescue' endpoint ---
 router.post('/link-official', async (req, res) => {
     const { threadId, manualId } = req.body;
     if (!threadId || !manualId) {
@@ -95,23 +91,41 @@ router.post('/link-official', async (req, res) => {
         thread.status = 'linked';
         
         const streamsToCreate = [];
-        for (const magnet_uri of thread.magnet_uris) {
+        // FIX: Ensure thread.magnet_uris is treated as an array, even if it's null/undefined initially.
+        const magnetUris = thread.magnet_uris || [];
+
+        for (const magnet_uri of magnetUris) {
             const streamDetails = parser.parseMagnet(magnet_uri);
-            if (streamDetails && streamDetails.episodes.length > 0) {
-                for (const episode of streamDetails.episodes) {
-                    streamsToCreate.push({
-                        tmdb_id: tmdbData.dbEntry.tmdb_id,
-                        season: streamDetails.season,
-                        episode: episode,
-                        infohash: streamDetails.infohash,
-                        quality: streamDetails.quality,
-                        language: streamDetails.language,
-                    });
+            if (streamDetails && streamDetails.season) {
+                // This logic correctly populates the streamsToCreate array
+                let streamEntry = {
+                    tmdb_id: tmdbData.dbEntry.tmdb_id,
+                    season: streamDetails.season,
+                    infohash: streamDetails.infohash,
+                    quality: streamDetails.quality,
+                    language: streamDetails.language
+                };
+                if (streamDetails.type === 'SEASON_PACK') {
+                    streamEntry.episode = 1;
+                    streamEntry.episode_end = 999;
+                } else if (streamDetails.type === 'EPISODE_PACK') {
+                    streamEntry.episode = streamDetails.episodeStart;
+                    streamEntry.episode_end = streamDetails.episodeEnd;
+                } else if (streamDetails.type === 'SINGLE_EPISODE') {
+                    streamEntry.episode = streamDetails.episode;
+                    streamEntry.episode_end = streamDetails.episode;
+                }
+                if (streamEntry.episode) {
+                    streamsToCreate.push(streamEntry);
                 }
             }
         }
-        await crud.createStreams(streamsToCreate);
         
+        if (streamsToCreate.length > 0) {
+            await crud.createStreams(streamsToCreate);
+        }
+        
+        // Clean up the now-processed fields
         thread.magnet_uris = null;
         thread.custom_poster = null;
         thread.custom_description = null;
