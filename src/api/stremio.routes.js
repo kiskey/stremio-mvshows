@@ -108,19 +108,17 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     }
     
     const requestedId = req.params.id;
-    let streams = [];
+    let streamsData = [];
 
     try {
         if (requestedId.startsWith('tt')) {
-            // --- IMDb ID Logic (for linked items) ---
-            const [imdb_id_part, season, episode] = requestedId.split(':');
-            const meta = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id_part }});
+            const [imdb_id, season, episode] = requestedId.split(':');
+            const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (meta) {
-                const dbStreams = await crud.findStreams(meta.tmdb_id, season, episode);
-                streams = dbStreams.map(s => ({...s, episode})); // Ensure episode num is correct
+                // crud.findStreams now returns the full stream objects
+                streamsData = await crud.findStreams(meta.tmdb_id, season, episode);
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            // --- Custom ID Logic (for pending items) ---
             const threadId = requestedId.split(':')[1];
             if (threadId) {
                 const thread = await models.Thread.findByPk(threadId);
@@ -128,9 +126,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     for (const magnet_uri of thread.magnet_uris) {
                         const streamDetails = parser.parseMagnet(magnet_uri);
                         if (streamDetails && streamDetails.episodes.length > 0) {
-                            // Create a stream for every single episode found
                             for (const epNum of streamDetails.episodes) {
-                                streams.push({
+                                streamsData.push({
                                     infohash: streamDetails.infohash,
                                     season: streamDetails.season,
                                     episode: epNum,
@@ -144,16 +141,18 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             }
         }
 
-        if (streams.length === 0) {
+        if (streamsData.length === 0) {
             return res.json({ streams: [] });
         }
         
-        streams.sort(sortStreamsByQuality);
+        streamsData.sort(sortStreamsByQuality);
 
-        const streamList = streams.map(s => ({
+        // FIX: The formatter now correctly uses the properties from the 's' object
+        // for every item in the streamsData array, ensuring no 'undefined' values.
+        const streamList = streamsData.map(s => ({
             infoHash: s.infohash,
-            name: `[TamilMV] S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')}`,
-            title: `${s.quality} | ${s.language} 🎬`,
+            name: `[TamilMV] - ${s.quality} 📺`,
+            title: `S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')} | ${s.language} 🎬\n${s.quality}`,
             sources: config.trackers
         }));
 
