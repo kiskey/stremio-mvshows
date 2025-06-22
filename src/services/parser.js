@@ -2,27 +2,19 @@
 const ptt = require('parse-torrent-title');
 const logger = require('../utils/logger');
 
-/**
- * Expands a numeric range from a string, handling multiple formats.
- * e.g., "01-22" or "(01-22)" or "17-20"
- * @param {string} rangeStr The string containing the range.
- * @returns {number[]} An array of numbers.
- */
-function expandEpisodeRange(rangeStr) {
-    const match = rangeStr.match(/(\d{1,3})[–-]\s*(\d{1,3})/);
-    if (!match) return [];
-    
-    const start = parseInt(match[1], 10);
-    const end = parseInt(match[2], 10);
-    const episodes = [];
-
-    if (!isNaN(start) && !isNaN(end) && end >= start) {
-        for (let i = start; i <= end; i++) {
-            episodes.push(i);
-        }
-    }
-    return episodes;
-}
+// Regex patterns inspired by the provided example for maximum accuracy.
+const PARSING_PATTERNS = [
+    // Case 1: Full packs like S01EP(01-13) or S01 EP (01-15) or S01(E01-26)
+    { regex: /S(\d{1,2})\s?EP?\s?\((\d{1,3})[-‑](\d{1,3})\)/i, type: 'EPISODE_PACK' },
+    // Case 2: Full packs like S02EP01-07 or S01E01-E16
+    { regex: /S(\d{1,2})\s?E(\d{1,3})[-‑]E?(\d{1,3})/i, type: 'EPISODE_PACK' },
+    // Case 3: Full packs like S01EP01-04 (no space, no parens)
+    { regex: /S(\d{1,2})EP(\d{1,3})[-‑](\d{1,3})/i, type: 'EPISODE_PACK' },
+    // Case 4: Single Episodes like S01EP16, S02 EP(06), or S03 EP07
+    { regex: /S(\d{1,2})\s?EP?\(?(\d{1,3})\)?(?![-‑])/i, type: 'SINGLE_EPISODE' },
+    // Case 5: Season-only packs like S1, S02, or titles with "Complete" / "Season"
+    { regex: /(?:S(eason)?\s*)(\d{1,2})(?!\s?E|\s?\d)|(Complete\sSeason|Season\s\d{1,2})/i, type: 'SEASON_PACK' }
+];
 
 /**
  * Parses a thread title using PTT after cleaning it.
@@ -30,14 +22,10 @@ function expandEpisodeRange(rangeStr) {
  * @returns {object|null} An object with { clean_title, year } or null.
  */
 function parseTitle(rawTitle) {
-    const cleanedForPtt = rawTitle
-        .replace(/By\s[\w\s.-]+,.*$/i, '')
-        .trim();
-
+    const cleanedForPtt = rawTitle.replace(/By\s[\w\s.-]+,.*$/i, '').trim();
     const pttResult = ptt.parse(cleanedForPtt);
 
     if (pttResult.title && pttResult.year) {
-        logger.info({ ptt_result: pttResult }, `PTT successfully parsed title: ${rawTitle}`);
         return { clean_title: pttResult.title, year: pttResult.year };
     }
     
@@ -47,70 +35,57 @@ function parseTitle(rawTitle) {
 
 /**
  * Parses a magnet URI's 'dn' parameter to extract stream metadata.
- * This function uses a robust regex-first approach as requested.
  * @param {string} magnetUri The full magnet URI.
- * @returns {object|null} An object with stream metadata or null.
+ * @returns {object|null} An object with stream metadata and a 'type' field.
  */
 function parseMagnet(magnetUri) {
     try {
         const params = new URLSearchParams(magnetUri.split('?')[1]);
         const infohash = params.get('xt')?.replace('urn:btih:', '');
-        
         let filename = params.get('dn') || '';
-        if (!filename) {
-            logger.warn({ magnetUri }, 'Magnet URI missing display name (dn parameter).');
+        if (!infohash || !filename) {
+            logger.warn({ magnetUri }, 'Magnet URI missing required parameters (xt, dn).');
             return null;
         }
 
-        filename = decodeURIComponent(filename)
-            .replace(/^www\.\w+\.\w+\s*-\s*/, '') // Remove domain prefix
-            .trim();
+        filename = decodeURIComponent(filename).replace(/^www\.\w+\.\w+\s*-\s*/, '').trim();
 
-        let season, episodes = [];
-        
-        // --- REGEX-FIRST STRATEGY ---
+        const pttResult = ptt.parse(filename);
+        let season, episode, episodeStart, episodeEnd;
 
-        // 1. Find Season (S01, S02, etc.)
-        const seasonMatch = filename.match(/S(\d{1,2})/i);
-        if (seasonMatch && seasonMatch[1]) {
-            season = parseInt(seasonMatch[1], 10);
-        }
-
-        // 2. Find Episode Range (EP (01-22), EP (01-06), etc.)
-        const rangeMatch = filename.match(/EP\s?\(?(\d{1,3}[–-]\d{1,3})\)?/i);
-        if (rangeMatch && rangeMatch[1]) {
-            episodes = expandEpisodeRange(rangeMatch[1]);
-        } else {
-            // 3. Find Single Episode (EP01, EP22, etc.) if no range is found
-            const singleEpisodeMatch = filename.match(/EP(\d{1,3})/i);
-            if (singleEpisodeMatch && singleEpisodeMatch[1]) {
-                episodes = [parseInt(singleEpisodeMatch[1], 10)];
+        for (const pattern of PARSING_PATTERNS) {
+            const match = filename.match(pattern.regex);
+            if (match) {
+                if (pattern.type === 'SEASON_PACK') {
+                    // Use the captured season number or fallback to PTT's result
+                    season = parseInt(match[1] || match[2]?.match(/\d+/)[0] || pttResult.season);
+                    if (season) return { type: 'SEASON_PACK', infohash, season, quality: pttResult.resolution, language: pttResult.language };
+                } else if (pattern.type === 'SINGLE_EPISODE') {
+                    season = parseInt(match[1]);
+                    episode = parseInt(match[2]);
+                    if (season && episode) return { type: 'SINGLE_EPISODE', infohash, season, episode, quality: pttResult.resolution, language: pttResult.language };
+                } else if (pattern.type === 'EPISODE_PACK') {
+                    season = parseInt(match[1]);
+                    episodeStart = parseInt(match[2]);
+                    episodeEnd = parseInt(match[3]);
+                    if (season && episodeStart && episodeEnd) return { type: 'EPISODE_PACK', infohash, season, episodeStart, episodeEnd, quality: pttResult.resolution, language: pttResult.language };
+                }
             }
         }
-
-        // 4. Use PTT as a fallback ONLY if our regex fails, or for supplementary data.
-        const pttResult = ptt.parse(filename);
         
-        // If our regex missed something, give PTT a chance.
-        if (!season && pttResult.season) season = pttResult.season;
-        if (episodes.length === 0 && pttResult.episode) episodes = [pttResult.episode];
-
-        // Final validation: We MUST have a season and at least one episode.
-        if (!season || episodes.length === 0) {
-            logger.warn({ filename }, `Regex and PTT failed to find required season/episode in magnet dn.`);
-            return null;
+        // Fallback to PTT's results if no advanced pattern matched
+        if (pttResult.season && pttResult.episode) {
+            return { type: 'SINGLE_EPISODE', infohash, season: pttResult.season, episode: pttResult.episode, quality: pttResult.resolution, language: pttResult.language };
+        }
+        if (pttResult.season) {
+            return { type: 'SEASON_PACK', infohash, season: pttResult.season, quality: pttResult.resolution, language: pttResult.language };
         }
 
-        return {
-            infohash,
-            season,
-            episodes,
-            quality: pttResult.resolution || 'SD',
-            language: pttResult.language || 'multi',
-        };
+        logger.warn({ filename }, 'All parsing patterns failed for magnet dn.');
+        return null;
+
     } catch (e) {
-        const shortMagnet = magnetUri.substring(0, 70);
-        logger.error({ err: e, magnet: `${shortMagnet}...` }, `Magnet parsing failed`);
+        logger.error({ err: e, magnet: magnetUri.substring(0, 70) }, `Magnet parsing failed`);
         return null;
     }
 }
