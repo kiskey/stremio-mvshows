@@ -9,67 +9,51 @@ const config = require('./config/config');
 const logger = require('./utils/logger');
 const { syncDb } = require('./database/connection');
 const { runFullWorkflow } = require('./services/orchestrator');
+const { fetchAndCacheTrackers } = require('./services/tracker'); // FIX: Import tracker service
 
 const stremioRoutes = require('./api/stremio.routes');
 const adminRoutes = require('./api/admin.routes');
 
 const app = express();
 
-/**
- * The main entry point for the application.
- * This function orchestrates the startup sequence.
- */
 async function main() {
-    // 1. Initialize Database: Ensure tables are created or updated.
     await syncDb();
     logger.info('Database synchronized successfully.');
 
-    // 2. Start the Express API Server:
-    // The API must be running continuously to serve requests from Stremio and admins.
-    app.use(cors()); // Enable Cross-Origin Resource Sharing
-    app.use(express.json()); // Enable JSON body parsing for POST requests
-    app.use(pinoHttp({ logger })); // Add structured logging for all HTTP requests
+    // FIX: Perform an initial fetch of trackers on startup
+    await fetchAndCacheTrackers();
 
-    // --- Define Routes ---
-    
-    // FIX: Serve the admin dashboard on the root URL
-    app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
-    });
+    app.use(cors());
+    app.use(express.json());
+    app.use(pinoHttp({ logger }));
 
-    // Also serve the admin UI at /admin for a consistent user experience
-    app.get('/admin', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
-    });
+    app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
+    app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
+    app.use(stremioRoutes);
+    app.use('/admin/api', adminRoutes);
 
-    // Register API route handlers
-    app.use(stremioRoutes); // Public Stremio routes (manifest, catalog, stream)
-    app.use('/admin/api', adminRoutes); // Private admin API routes, now namespaced to avoid conflicts
-
-    // Start listening for requests
     app.listen(config.port, () => {
         logger.info(`Stremio Addon server running on http://localhost:${config.port}`);
     });
     
-    // 3. Perform an initial crawl on application startup
-    logger.info('Performing initial crawl on startup...');
+    // Start the crawl workflow
     runFullWorkflow();
     
-    // 4. Schedule the recurring crawl using node-cron
-    const schedule = '0 */6 * * *'; // Every 6 hours
-    
-    cron.schedule(schedule, () => {
-        logger.info(`Cron job triggered by schedule (${schedule}). Starting workflow...`);
+    // Schedule recurring jobs
+    cron.schedule('0 */6 * * *', () => {
+        logger.info('Cron job triggered for main workflow...');
         runFullWorkflow();
-    }, {
-        scheduled: true,
-        timezone: "Etc/UTC"
-    });
+    }, { scheduled: true, timezone: "Etc/UTC" });
+
+    // FIX: Schedule recurring tracker updates
+    cron.schedule('0 * * * *', () => { // Every hour at minute 0
+        logger.info('Cron job triggered for tracker update...');
+        fetchAndCacheTrackers();
+    }, { scheduled: true, timezone: "Etc/UTC" });
     
-    logger.info(`Crawler is now scheduled to run automatically on schedule: "${schedule}" (UTC).`);
+    logger.info(`Crawler scheduled for every 6 hours. Tracker list scheduled to update every hour.`);
 }
 
-// --- Start Application ---
 main().catch(err => {
     logger.fatal(err, 'Application failed to start due to a fatal error.');
     process.exit(1);
