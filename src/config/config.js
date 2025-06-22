@@ -20,6 +20,8 @@ const config = {
     addonName: 'TamilMV WebSeries Addon',
     addonDescription: 'A Stremio addon providing streams from a TamilMV torrent forum.',
     addonVersion: '1.0.0',
+       // NEW: A placeholder poster for content that hasn't been matched yet.
+    placeholderPoster: 'https://i.imgur.com/b54abw2.png',
 
     trackers: [
         "udp://tracker.opentrackr.org:1337/announce",
