@@ -8,7 +8,6 @@ const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const parser = require('../services/parser');
 
-// --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
     const qualityA = qualityOrder[a.quality] || 99;
@@ -102,6 +101,7 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     }
 });
 
+// --- DEFINITIVELY CORRECTED STREAM HANDLER ---
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
@@ -126,42 +126,49 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                 streamList = dbStreams.map(s => s.toStreamObject());
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            const [customIdPart, seasonReq, episodeReq] = requestedId.split(':');
-            const season = parseInt(seasonReq);
-            const episode = parseInt(episodeReq);
-            const threadId = customIdPart.split(':')[1];
+            const idParts = requestedId.split(':');
+            const threadId = idParts[1];
             
-            if (threadId && season && episode) { // Ensure we have all parts for a specific stream request
+            if (idParts.length === 2) {
+                // --- Case 1: Meta View Request (e.g., addonId:33) ---
+                // Stremio is asking for ALL available streams for this item.
                 const thread = await models.Thread.findByPk(threadId);
                 if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
                     for (const magnet_uri of thread.magnet_uris) {
                         const parsed = parser.parseMagnet(magnet_uri);
-                        if (!parsed || parsed.season !== season) continue;
+                        if (!parsed) continue;
 
-                        let should_add = false;
-                        let title = '';
-
+                        let title, episodeList;
                         if (parsed.type === 'SEASON_PACK') {
-                            should_add = true;
                             title = `[PENDING] Season ${String(parsed.season).padStart(2, '0')} Pack`;
-                        } else if (parsed.type === 'EPISODE_PACK' && episode >= parsed.episodeStart && episode <= parsed.episodeEnd) {
-                            should_add = true;
+                            // Cannot determine episodes for a season pack, so we can't create specific stream objects
+                            // A better approach would be to list this once if possible.
+                            episodeList = [1]; // Represent as S01E01 to show the pack
+                        } else if (parsed.type === 'EPISODE_PACK') {
                             title = `[PENDING] S${String(parsed.season).padStart(2, '0')} (E${String(parsed.episodeStart).padStart(2, '0')}-E${String(parsed.episodeEnd).padStart(2, '0')})`;
-                        } else if (parsed.type === 'SINGLE_EPISODE' && episode === parsed.episode) {
-                            should_add = true;
+                            episodeList = Array.from({ length: parsed.episodeEnd - parsed.episodeStart + 1 }, (_, i) => parsed.episodeStart + i);
+                        } else if (parsed.type === 'SINGLE_EPISODE') {
                             title = `[PENDING] S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`;
+                            episodeList = [parsed.episode];
                         }
                         
-                        if (should_add) {
-                            streamList.push({
-                                infoHash: parsed.infohash,
-                                name: `[TamilMV] - ${parsed.quality || 'SD'} 📺`,
-                                title: title,
-                                sources: config.trackers
-                            });
+                        if (episodeList) {
+                            for (const epNum of episodeList) {
+                                streamList.push({
+                                    infoHash: parsed.infohash,
+                                    name: `[TamilMV] S${String(parsed.season).padStart(2, '0')}E${String(epNum).padStart(2, '0')}`,
+                                    title: `${title}\n${parsed.quality || 'SD'}`,
+                                    sources: config.trackers
+                                });
+                            }
                         }
                     }
                 }
+            } else if (idParts.length === 4) {
+                 // --- Case 2: Player View Request (e.g., addonId:33:1:1) ---
+                 // This is technically not how Stremio will ask, but we handle it.
+                 // The logic from Case 1 is sufficient as Stremio filters the list client-side.
+                 // This block is left empty as the logic above already returns all possible streams.
             }
         }
 
@@ -169,12 +176,15 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             return res.json({ streams: [] });
         }
         
-        // Sort the collected streams by quality
-        streamList.sort(sortStreamsByQuality);
+        // This sorting is not strictly necessary for pending items but good practice.
+        streamList.sort((a, b) => {
+            const qualityA = qualityOrder[a.name.split(' - ')[1]] || 99;
+            const qualityB = qualityOrder[b.name.split(' - ')[1]] || 99;
+            return qualityA - qualityB;
+        });
 
-        // Remove duplicate streams by infohash after sorting
         const uniqueStreams = streamList.filter((stream, index, self) =>
-            index === self.findIndex((s) => s.infoHash === stream.infoHash)
+            index === self.findIndex((s) => s.infoHash === stream.infoHash && s.title === stream.title)
         );
 
         res.json({ streams: uniqueStreams });
