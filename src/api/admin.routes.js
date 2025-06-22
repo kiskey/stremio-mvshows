@@ -8,13 +8,11 @@ const parser = require('../services/parser');
 const crud = require('../database/crud');
 const logger = require('../utils/logger');
 
-// Endpoint to manually trigger the crawling and processing workflow
 router.post('/trigger-crawl', (req, res) => {
     runFullWorkflow();
     res.status(202).json({ message: "Crawl workflow triggered successfully. Check logs for progress." });
 });
 
-// Endpoint to get statistics for the dashboard UI
 router.get('/dashboard', async (req, res) => {
     const cachedStats = getDashboardCache();
     if (!cachedStats.lastUpdated) {
@@ -24,7 +22,6 @@ router.get('/dashboard', async (req, res) => {
     res.json(cachedStats);
 });
 
-// Endpoint to get the list of threads pending a TMDB match
 router.get('/pending', async (req, res) => {
     try {
         const pendingThreads = await models.Thread.findAll({
@@ -38,8 +35,6 @@ router.get('/pending', async (req, res) => {
     }
 });
 
-// --- NEW ENDPOINT TO VIEW FAILURES ---
-// Endpoint to get the list of threads that failed parsing critically.
 router.get('/failures', async (req, res) => {
     try {
         const failedThreads = await models.FailedThread.findAll({
@@ -51,10 +46,33 @@ router.get('/failures', async (req, res) => {
         res.status(500).json({ message: "Error fetching critical failures." });
     }
 });
-// --- END NEW ENDPOINT ---
 
-// Endpoint to manually rescue a pending thread with a correct ID
-router.post('/rescue', async (req, res) => {
+// --- NEW ENDPOINT to save custom metadata for a pending item ---
+router.post('/update-pending', async (req, res) => {
+    const { threadId, poster, description } = req.body;
+    if (!threadId) {
+        return res.status(400).json({ message: 'threadId is required.' });
+    }
+
+    try {
+        const thread = await models.Thread.findByPk(threadId);
+        if (!thread || thread.status !== 'pending_tmdb') {
+            return res.status(404).json({ message: 'Pending thread not found.' });
+        }
+        
+        thread.custom_poster = poster || null;
+        thread.custom_description = description || null;
+        await thread.save();
+
+        res.json({ message: `Successfully updated pending metadata for "${thread.clean_title}".` });
+    } catch (error) {
+        logger.error(error, 'Update pending operation failed.');
+        res.status(500).json({ message: 'An internal error occurred during update.' });
+    }
+});
+
+// --- RENAMED & ENHANCED 'rescue' endpoint ---
+router.post('/link-official', async (req, res) => {
     const { threadId, manualId } = req.body;
     if (!threadId || !manualId) {
         return res.status(400).json({ message: 'threadId and manualId are required.' });
@@ -95,6 +113,8 @@ router.post('/rescue', async (req, res) => {
         await crud.createStreams(streamsToCreate);
         
         thread.magnet_uris = null;
+        thread.custom_poster = null;
+        thread.custom_description = null;
         await thread.save();
         
         await updateDashboardCache();
