@@ -1,6 +1,4 @@
 // src/api/stremio.routes.js
-// ... (top part with quality sort and manifest is unchanged) ...
-
 const express = require('express');
 const router = express.Router();
 const config = require('../config/config');
@@ -9,6 +7,7 @@ const crud = require('../database/crud');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 
+// --- Quality Sorting Helper ---
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
     const qualityA = qualityOrder[a.quality] || 99;
@@ -16,19 +15,21 @@ const sortStreamsByQuality = (a, b) => {
     return qualityA - qualityB;
 };
 
+// --- CORRECTED MANIFEST ---
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
         version: config.addonVersion,
         name: config.addonName,
         description: config.addonDescription,
-        resources: ['catalog', 'stream'],
+        // FIX: Add 'meta' to the list of supported resources
+        resources: ['catalog', 'stream', 'meta'], 
         types: ['series'], 
-        idPrefixes: ['tt', config.addonId],
+        idPrefixes: ['tt', config.addonId], 
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
-            name: 'TamilMV Webseries',
+            name: 'Forum TV Shows',
             extra: [{ "name": "skip", "isRequired": false }]
         }],
         behaviorHints: { configurable: false, adult: false }
@@ -36,7 +37,6 @@ router.get('/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// --- ENHANCED CATALOG HANDLER with custom pending metadata ---
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
     let skip = 0;
@@ -71,18 +71,17 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                 id: meta.imdb_id,
                 type: 'series',
                 name: parsedData.title,
-                poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
+                poster: parsedData.poster_path 
+                    ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}`
+                    : null,
             };
         });
         
-        // FIX: Use the new custom metadata fields for pending items
         const pendingMetas = pendingThreads.map(thread => ({
             id: `${config.addonId}:${thread.id}`,
             type: 'series',
             name: `[PENDING] ${thread.clean_title}`,
-            // Use the custom poster if it exists, otherwise the generic placeholder
             poster: thread.custom_poster || config.placeholderPoster, 
-            // Use the custom description if it exists
             description: thread.custom_description || `This item is pending an official metadata match.`
         }));
 
@@ -93,6 +92,45 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
 
     } catch (error) {
         logger.error(error, "Failed to fetch catalog data.");
+        res.status(500).json({ err: 'Internal Server Error' });
+    }
+});
+
+// --- NEW META HANDLER ---
+// This endpoint responds when Stremio asks for details about one of our custom IDs.
+router.get('/meta/:type/:id.json', async (req, res) => {
+    const { type, id } = req.params;
+
+    // We only serve metadata for our custom series IDs
+    if (type !== 'series' || !id.startsWith(config.addonId)) {
+        return res.status(404).json({ err: 'Not Found' });
+    }
+
+    try {
+        const threadId = id.split(':')[1];
+        const thread = await models.Thread.findByPk(threadId);
+
+        if (!thread || thread.status !== 'pending_tmdb') {
+            return res.status(404).json({ err: 'Pending item not found' });
+        }
+
+        // Construct the full meta object Stremio expects
+        const metaObject = {
+            id: id,
+            type: 'series',
+            name: thread.clean_title,
+            poster: thread.custom_poster || config.placeholderPoster,
+            description: thread.custom_description || 'Metadata is pending for this item. Streams may be available.',
+            releaseInfo: thread.year ? thread.year.toString() : '',
+            // You can add more fields here if you choose to store them
+            // genres: ['Unknown'],
+            // runtime: 'N/A'
+        };
+
+        res.json({ meta: metaObject });
+
+    } catch (error) {
+        logger.error(error, `Failed to fetch meta for ID: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
