@@ -2,9 +2,12 @@
 const { runCrawler } = require('./crawler');
 const parser = require('./parser');
 const metadata = require('./metadata');
+const rd = require('./realdebrid');
 const crud = require('../database/crud');
 const logger = require('../utils/logger');
 const { models } = require('../database/connection');
+const { Op } = require('sequelize');
+const config = require('../config/config');
 
 let isCrawling = false;
 let dashboardCache = { linked: 0, pending: 0, failed: 0, lastUpdated: null };
@@ -36,6 +39,36 @@ const runFullWorkflow = async () => {
     try {
         const allScrapedThreads = await runCrawler();
         
+        // --- Real-Debrid Hash Checking (only if enabled) ---
+        if (config.isRdEnabled) {
+            const allInfohashes = new Set();
+            allScrapedThreads.forEach(thread => {
+                thread.magnet_uris.forEach(magnet_uri => {
+                    const infohash = parser.getInfohash(magnet_uri);
+                    if (infohash) allInfohashes.add(infohash);
+                });
+            });
+
+            const existingHashes = await models.Hash.findAll({
+                where: { infohash: { [Op.in]: Array.from(allInfohashes) } },
+                attributes: ['infohash'], raw: true,
+            });
+            const existingHashSet = new Set(existingHashes.map(h => h.infohash));
+            const newHashes = Array.from(allInfohashes).filter(h => !existingHashSet.has(h));
+            
+            if (newHashes.length > 0) {
+                logger.info(`Found ${newHashes.length} new infohashes to check against Real-Debrid.`);
+                const availability = await rd.checkInstantAvailability(newHashes);
+                const hashesToSave = Object.keys(availability).map(hash => ({
+                    infohash: hash, is_rd_cached: availability[hash],
+                }));
+                await models.Hash.bulkCreate(hashesToSave, { ignoreDuplicates: true });
+            } else {
+                logger.info('No new infohashes found to check against Real-Debrid.');
+            }
+        }
+        // --- End Real-Debrid Logic ---
+
         let processedCount = 0;
         let skippedCount = 0;
 
@@ -47,7 +80,7 @@ const runFullWorkflow = async () => {
             if (existingThread) {
                 if (existingThread.thread_hash === thread_hash) {
                     skippedCount++;
-                    continue; 
+                    continue;
                 } else {
                     logger.info(`Thread content has changed. Re-processing: ${raw_title}`);
                     await existingThread.destroy();
@@ -85,26 +118,22 @@ const runFullWorkflow = async () => {
                             quality: streamDetails.quality,
                             language: streamDetails.language
                         };
-                        
-                        // FIX: Correctly handle the different pack types from the parser
                         if (streamDetails.type === 'SEASON_PACK') {
-                            streamEntry.episode = 1; // Represents the whole season
-                            streamEntry.episode_end = 999; // Use a high number to signify 'all episodes'
+                            streamEntry.episode = 1;
+                            streamEntry.episode_end = 999;
                         } else if (streamDetails.type === 'EPISODE_PACK') {
                             streamEntry.episode = streamDetails.episodeStart;
                             streamEntry.episode_end = streamDetails.episodeEnd;
                         } else if (streamDetails.type === 'SINGLE_EPISODE') {
                             streamEntry.episode = streamDetails.episode;
-                            streamEntry.episode_end = streamDetails.episode; // End is same as start
+                            streamEntry.episode_end = streamDetails.episode;
                         }
-                        
                         if (streamEntry.episode) {
                             streamsToCreate.push(streamEntry);
                         }
                     }
                 }
                 if (streamsToCreate.length > 0) {
-                    // Use bulkCreate with updateOnDuplicate to be more efficient
                     await models.Stream.bulkCreate(streamsToCreate, {
                         updateOnDuplicate: ['quality', 'language', 'updatedAt']
                     });
