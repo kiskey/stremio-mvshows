@@ -148,9 +148,6 @@ router.get('/rd-add/:streamId.json', async (req, res) => {
             await rd.selectFiles(rdResponse.id);
             res.redirect(`/rd-poll/${stream.id}.json`);
         } else {
-            // This might happen if the torrent was already active but we couldn't get the ID
-            // A more robust solution could search the user's torrent list by hash here.
-            // For now, we will ask the user to try again later.
             res.status(503).json({ error: 'Torrent is already active or could not be added. Please try again in a moment.' });
         }
     } catch (error) {
@@ -178,29 +175,25 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             });
 
             if (rd.isEnabled) {
-                // Real-Debrid Logic for linked items
                 for (const stream of dbStreams) {
                     if (stream.rd_link) {
-                        finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${season}E${episode}\nCached on Real-Debrid`, quality: stream.quality });
+                        finalStreams.push({ name: `[TamilMv - RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${season}E${episode}\nCached on Real-Debrid`, quality: stream.quality });
                     } else {
-                        // In the on-demand model, we always present the option to download.
-                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${season}E${episode}\nClick to download to Real-Debrid`, quality: stream.quality });
+                        // FIX: Use the configured appHost for the polling URL
+                        finalStreams.push({ name: `[TamilMV - RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${season}E${episode}\nClick to download on Real-Debrid`, quality: stream.quality });
                     }
                 }
             } else {
-                // P2P Logic for linked items
                 finalStreams = dbStreams.map(s => {
                     const seasonStr = String(s.season).padStart(2, '0');
                     let episodeStr;
                     if (!s.episode_end || s.episode_end === s.episode) episodeStr = `Episode ${String(s.episode).padStart(2, '0')}`;
                     else if (s.episode === 1 && s.episode_end === 999) episodeStr = 'Season Pack';
                     else episodeStr = `Episodes ${String(s.episode).padStart(2, '0')}-${String(s.episode_end).padStart(2, '0')}`;
-                    
                     return { infoHash: s.infohash, name: `[TamilMV - P2P] - ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
                 });
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            // P2P Logic for Pending Items
             const idParts = requestedId.split(':');
             const threadId = idParts[1];
             if (threadId) {
@@ -209,13 +202,11 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     for (const magnet_uri of thread.magnet_uris) {
                         const parsed = parser.parseMagnet(magnet_uri);
                         if (!parsed) continue;
-
                         const seasonStr = String(parsed.season).padStart(2, '0');
                         let episodeStr;
                         if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
                         else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
                         else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
-
                         finalStreams.push({
                             infoHash: parsed.infohash,
                             name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`,
