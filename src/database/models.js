@@ -61,5 +61,7 @@ module.exports = (sequelize) => {
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'failed_threads', timestamps: false });
     
+    // The Hash model is removed as it's not part of the on-demand strategy.
+    
     return { Thread, TmdbMetadata, Stream, FailedThread };
 };
