@@ -15,9 +15,12 @@ const config = {
     // TMDB API Key
     tmdbApiKey: process.env.TMDB_API_KEY,
 
+     // FIX: API Key is now optional
+    realDebridApiKey: process.env.REALDEBRID_API_KEY || null,
+
     // Stremio Manifest
     addonId: 'org.stremio.torrent.nodejs.example',
-    addonName: 'TamilMV WebSeries Addon',
+    addonName: 'TamilMV WebSeries',
     addonDescription: 'A Stremio addon providing streams from a TamilMV torrent forum.',
     addonVersion: '1.0.0',
        // NEW: A placeholder poster for content that hasn't been matched yet.
@@ -29,6 +32,10 @@ const config = {
     
     appHost: process.env.APP_HOST || 'http://127.0.0.1:3000',
 };
+
+// FIX: Add a boolean flag for easy checking
+config.isRdEnabled = !!config.realDebridApiKey;
+
 
 // Validate required variables
 if (!config.forumUrl || !config.tmdbApiKey) {
