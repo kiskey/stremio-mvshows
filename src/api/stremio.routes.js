@@ -12,7 +12,6 @@ const { getTrackers } = require('../services/tracker');
 
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
-    // A bit of defensive coding to handle different object shapes
     const qualityA = qualityOrder[a.quality] || 99;
     const qualityB = qualityOrder[b.quality] || 99;
     return qualityA - qualityB;
@@ -21,7 +20,7 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "4.0.0", // Final Binge-Ready Release
+        version: "4.1.0", // Final Stable Release
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -104,7 +103,6 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     }
 });
 
-
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
@@ -124,25 +122,24 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             });
 
             if (rd.isEnabled) {
-                // --- REAL-DEBRID LOGIC ---
+                // --- REAL-DEBRID LOGIC (fileIdx method) ---
                 for (const stream of dbStreams) {
-                    const torrentOnRd = await rd.findTorrentByHash(stream.infohash);
-                    if (torrentOnRd && torrentOnRd.status === 'downloaded') {
-                        const torrentInfo = await rd.getTorrentInfo(torrentOnRd.id);
-                        const episodeFile = torrentInfo.files.find(file => {
-                            const epMatch = file.path.match(/e(\d{1,3})/i);
-                            return epMatch && parseInt(epMatch[1]) === parseInt(episode);
-                        });
+                    const torrentInfo = await rd.addAndSelect(`magnet:?xt=urn:btih:${stream.infohash}`);
+                    if (!torrentInfo || !torrentInfo.files) continue;
 
-                        if (episodeFile) {
-                            finalStreams.push({
-                                name: `[RD+] ${stream.quality} ⚡️`,
-                                title: `S${String(stream.season).padStart(2, '0')}E${String(episode).padStart(2, '0')}\n${episodeFile.path.substring(1)}`,
-                                infoHash: stream.infohash,
-                                fileIdx: episodeFile.id,
-                                quality: stream.quality
-                            });
-                        }
+                    const episodeFile = torrentInfo.files.find(file => {
+                        const epMatch = file.path.match(/e(\d{1,3})/i);
+                        return epMatch && parseInt(epMatch[1]) === parseInt(episode);
+                    });
+
+                    if (episodeFile) {
+                        finalStreams.push({
+                            name: `[RD+] ${stream.quality} ⚡️`,
+                            title: `S${String(stream.season).padStart(2, '0')}E${String(episode).padStart(2, '0')}\n${episodeFile.path.substring(1)}`,
+                            infoHash: stream.infohash,
+                            fileIdx: episodeFile.id,
+                            quality: stream.quality
+                        });
                     }
                 }
             } else {
@@ -167,7 +164,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     for (const magnet_uri of thread.magnet_uris) {
                         const parsed = parser.parseMagnet(magnet_uri);
                         if (!parsed) continue;
-
                         const seasonStr = String(parsed.season).padStart(2, '0');
                         let episodeStr;
                         if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
@@ -189,25 +185,23 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         
         finalStreams.sort(sortStreamsByQuality);
 
-        // For RD streams, Stremio handles playback. For P2P, we add trackers.
-        const streamsWithSources = finalStreams.map(s => {
-            if (s.fileIdx !== undefined) { // It's a Real-Debrid stream
+        const uniqueStreams = finalStreams.filter((stream, index, self) => 
+            index === self.findIndex((s) => s.infoHash === stream.infoHash && s.fileIdx === stream.fileIdx)
+        ).map(s => {
+            // If it's an RD stream, Stremio handles it. If P2P, we add trackers.
+            if (s.fileIdx !== undefined) {
                 return s;
             }
-            // It's a P2P stream
             return { ...s, sources: [ `dht:${s.infoHash}`, ...getTrackers() ] };
         });
-
-        const uniqueStreams = streamsWithSources.filter((stream, index, self) => 
-            index === self.findIndex((s) => s.infoHash === stream.infoHash && s.fileIdx === stream.fileIdx)
-        );
 
         res.json({ streams: uniqueStreams });
 
     } catch (error) {
         logger.error(error, `Failed to get streams for ID: ${requestedId}`);
-        res.status(500).json({ streams: [] });
+        res.status(500).json({ streams: [], error: error.message });
     }
 });
+
 
 module.exports = router;
