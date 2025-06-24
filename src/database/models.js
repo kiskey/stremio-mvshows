@@ -28,12 +28,15 @@ module.exports = (sequelize) => {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         tmdb_id: { type: DataTypes.STRING, allowNull: false },
         season: { type: DataTypes.INTEGER, allowNull: false },
-        episode: { type: DataTypes.INTEGER, allowNull: false },
-        episode_end: { type: DataTypes.INTEGER, allowNull: true },
+        episode: { type: DataTypes.INTEGER, allowNull: false, comment: "Starting episode number" },
+        episode_end: { type: DataTypes.INTEGER, allowNull: true, comment: "Ending episode number, same as episode for single episodes" },
         infohash: { type: DataTypes.STRING, allowNull: false },
         quality: DataTypes.STRING,
         language: DataTypes.STRING,
-        // REMOVED: All rd_* columns are no longer needed with the fileIdx approach.
+        rd_id: { type: DataTypes.STRING, allowNull: true, comment: "Real-Debrid's internal ID for the torrent" },
+        rd_status: { type: DataTypes.STRING, allowNull: true, comment: "e.g., adding_to_rd, downloading, downloaded, error" },
+        rd_link: { type: DataTypes.STRING, allowNull: true, comment: "The final, unrestricted streaming link" },
+        rd_last_checked: { type: DataTypes.DATE, allowNull: true },
     }, { 
         tableName: 'streams', 
         timestamps: true,
