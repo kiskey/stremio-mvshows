@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const config = require('../config/config');
 const { models } = require('../database/connection');
+const crud = require('../database/crud');
 const rd = require('../services/realdebrid');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
@@ -19,7 +20,7 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "7.0.0", // Final Stable Release
+        version: "7.1.0", // Final Stable Release
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -104,26 +105,20 @@ router.get('/meta/:type/:id.json', async (req, res) => {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-router.get('/rd-poll/:streamId/:episode.json', async (req, res) => {
-    const { streamId, episode } = req.params;
-    if (!rd.isEnabled || !streamId) {
-        return res.status(404).send('Not Found');
-    }
+router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
+    const { infohash, episode } = req.params;
+    if (!rd.isEnabled || !infohash) return res.status(404).send('Not Found');
+
     try {
-        const stream = await models.Stream.findByPk(streamId);
-        if (!stream || !stream.rd_id) {
-            return res.status(404).json({ error: 'Stream not found or not processing on RD.' });
+        const rdTorrent = await models.RdTorrent.findByPk(infohash);
+        if (!rdTorrent || !rdTorrent.rd_id) {
+            return res.status(404).json({ error: 'Torrent not being processed.' });
         }
+
         for (let i = 0; i < 36; i++) { // Poll for up to 3 minutes
-            const torrentInfo = await rd.getTorrentInfo(stream.rd_id);
+            const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
             if (torrentInfo && torrentInfo.status === 'downloaded') {
-                // When downloaded, persist the file list for future use
-                await models.RdTorrent.upsert({ 
-                    infohash: stream.infohash, 
-                    rd_id: stream.rd_id, 
-                    status: 'downloaded', 
-                    files: torrentInfo.files 
-                });
+                await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, last_checked: new Date() });
 
                 const episodeFile = torrentInfo.files.find(file => {
                     const epMatch = file.path.match(/[Ee](\d{1,3})/);
@@ -131,17 +126,16 @@ router.get('/rd-poll/:streamId/:episode.json', async (req, res) => {
                 }) || torrentInfo.files.sort((a,b) => b.bytes - a.bytes)[0];
 
                 if (episodeFile && torrentInfo.links && torrentInfo.links.length > 0) {
-                    const linkToUnrestrict = torrentInfo.links[0];
-                    const unrestricted = await rd.unrestrictLink(linkToUnrestrict);
+                    const unrestricted = await rd.unrestrictLink(torrentInfo.links[0]);
                     return res.redirect(302, unrestricted.download);
                 }
             }
-            await delay(5000);
+            await delay(5000); // Wait 5 seconds
         }
-        await models.RdTorrent.upsert({ infohash: stream.infohash, rd_id: stream.rd_id, status: 'error' });
+        await rdTorrent.update({ status: 'error' });
         res.status(404).json({ error: 'Torrent timed out on Real-Debrid.' });
     } catch (error) {
-        logger.error(error, `Polling failed for stream ID: ${streamId}`);
+        logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
     }
 });
@@ -151,8 +145,9 @@ router.get('/rd-add/:streamId/:episode.json', async (req, res) => {
     const { streamId, episode } = req.params;
     if (!rd.isEnabled) return res.status(404).send('Not Found');
     
+    let stream;
     try {
-        const stream = await models.Stream.findByPk(streamId);
+        stream = await models.Stream.findByPk(streamId);
         if (!stream) {
             return res.status(404).json({ error: 'Stream not found.' });
         }
@@ -210,13 +205,15 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
                     
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
+
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files) {
                         const episodeFile = rdTorrent.files.find(file => {
                             const epMatch = file.path.match(/[Ee](\d{1,3})/);
                             return epMatch && parseInt(epMatch[1]) === parseInt(episode);
                         });
+
                         if (episodeFile) {
-                            const unrestricted = await rd.unrestrictLink(episodeFile.download_url); // This needs the hoster link from the torrent info, which we don't have.
+                            const unrestricted = await rd.unrestrictLink(episodeFile.download_url);
                             finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `S${seasonStr} | ${episodeStr}\n${episodeFile.path.substring(1)}`, quality: stream.quality });
                         }
                     } else {
