@@ -9,7 +9,7 @@ const config = require('./config/config');
 const logger = require('./utils/logger');
 const { syncDb } = require('./database/connection');
 const { runFullWorkflow } = require('./services/orchestrator');
-const { fetchAndCacheTrackers } = require('./services/tracker'); // FIX: Import tracker service
+const { fetchAndCacheTrackers } = require('./services/tracker');
 
 const stremioRoutes = require('./api/stremio.routes');
 const adminRoutes = require('./api/admin.routes');
@@ -17,10 +17,10 @@ const adminRoutes = require('./api/admin.routes');
 const app = express();
 
 async function main() {
+    logger.info(`Real-Debrid integration is ${config.isRdEnabled ? 'ENABLED' : 'DISABLED'}.`);
+    
     await syncDb();
-    logger.info('Database synchronized successfully.');
 
-    // FIX: Perform an initial fetch of trackers on startup
     await fetchAndCacheTrackers();
 
     app.use(cors());
@@ -36,17 +36,14 @@ async function main() {
         logger.info(`Stremio Addon server running on http://localhost:${config.port}`);
     });
     
-    // Start the crawl workflow
     runFullWorkflow();
     
-    // Schedule recurring jobs
     cron.schedule('0 */6 * * *', () => {
         logger.info('Cron job triggered for main workflow...');
         runFullWorkflow();
     }, { scheduled: true, timezone: "Etc/UTC" });
 
-    // FIX: Schedule recurring tracker updates
-    cron.schedule('0 * * * *', () => { // Every hour at minute 0
+    cron.schedule('0 * * * *', () => {
         logger.info('Cron job triggered for tracker update...');
         fetchAndCacheTrackers();
     }, { scheduled: true, timezone: "Etc/UTC" });
