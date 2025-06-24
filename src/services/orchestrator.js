@@ -27,7 +27,6 @@ async function updateDashboardCache() {
 
 function getDashboardCache() { return dashboardCache; }
 
-// A helper function to introduce a polite delay
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const runFullWorkflow = async () => {
@@ -46,7 +45,7 @@ const runFullWorkflow = async () => {
             const allInfohashes = new Set();
             allScrapedThreads.forEach(thread => {
                 thread.magnet_uris.forEach(magnet_uri => {
-                    const infohash = parser.getInfohash(magnet_uri);
+                    const infohash = parser.getInfohash(magnet_uri); // This call will now succeed
                     if (infohash) allInfohashes.add(infohash);
                 });
             });
@@ -60,11 +59,8 @@ const runFullWorkflow = async () => {
             
             if (newHashes.length > 0) {
                 logger.info(`Found ${newHashes.length} new infohashes to check against Real-Debrid.`);
-                
-                // --- FIX: Implement chunking and delay for rate-limit safety ---
-                const chunkSize = 40; // Recommended chunk size by RD community
+                const chunkSize = 40;
                 const allHashesToSave = [];
-
                 for (let i = 0; i < newHashes.length; i += chunkSize) {
                     const chunk = newHashes.slice(i, i + chunkSize);
                     logger.debug(`Checking RD cache status for chunk ${i / chunkSize + 1}...`);
@@ -73,13 +69,10 @@ const runFullWorkflow = async () => {
                         infohash: hash, is_rd_cached: availability[hash],
                     }));
                     allHashesToSave.push(...chunkToSave);
-                    
-                    // Add a polite delay between API calls
                     if (i + chunkSize < newHashes.length) {
-                        await delay(500); // 0.5-second delay
+                        await delay(500);
                     }
                 }
-                
                 await models.Hash.bulkCreate(allHashesToSave, { ignoreDuplicates: true });
                 logger.info(`Finished checking all new hashes. ${allHashesToSave.length} hashes updated in local DB.`);
             } else {
