@@ -104,7 +104,6 @@ const runFullWorkflow = async () => {
                     await models.Stream.bulkCreate(streamsToCreate, { ignoreDuplicates: true });
                     logger.info(`Upserted ${streamsToCreate.length} stream entries for ${parsedTitle.clean_title}`);
                 }
-
             } else {
                 logger.warn(`No TMDB match for "${parsedTitle.clean_title}". Saving as 'pending_tmdb'.`);
                 await crud.createOrUpdateThread({
@@ -114,13 +113,11 @@ const runFullWorkflow = async () => {
                 });
             }
         }
-
         logger.info({
             totalScraped: allScrapedThreads.length,
             newOrUpdated: processedCount,
             unchangedSkipped: skippedCount
         }, 'Processing complete.');
-
     } catch (error) {
         logger.error(error, "The crawling workflow encountered a fatal error.");
     } finally {
