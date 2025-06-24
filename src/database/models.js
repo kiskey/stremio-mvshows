@@ -41,7 +41,6 @@ module.exports = (sequelize) => {
         infohash: { type: DataTypes.STRING, allowNull: false },
         quality: DataTypes.STRING,
         language: DataTypes.STRING,
-        // --- NEW RD TRACKING FIELDS ---
         rd_id: { type: DataTypes.STRING, allowNull: true, comment: "Real-Debrid's internal ID for the torrent" },
         rd_status: { type: DataTypes.STRING, allowNull: true, comment: "e.g., downloading, downloaded, error" },
         rd_link: { type: DataTypes.STRING, allowNull: true, comment: "The final, unrestricted streaming link" },
