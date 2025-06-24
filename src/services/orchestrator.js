@@ -27,6 +27,9 @@ async function updateDashboardCache() {
 
 function getDashboardCache() { return dashboardCache; }
 
+// A helper function to introduce a polite delay
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 const runFullWorkflow = async () => {
     if (isCrawling) {
         logger.warn("Crawl is already in progress. Skipping this trigger.");
@@ -39,7 +42,6 @@ const runFullWorkflow = async () => {
     try {
         const allScrapedThreads = await runCrawler();
         
-        // --- Real-Debrid Hash Checking (only if enabled) ---
         if (config.isRdEnabled) {
             const allInfohashes = new Set();
             allScrapedThreads.forEach(thread => {
@@ -58,25 +60,39 @@ const runFullWorkflow = async () => {
             
             if (newHashes.length > 0) {
                 logger.info(`Found ${newHashes.length} new infohashes to check against Real-Debrid.`);
-                const availability = await rd.checkInstantAvailability(newHashes);
-                const hashesToSave = Object.keys(availability).map(hash => ({
-                    infohash: hash, is_rd_cached: availability[hash],
-                }));
-                await models.Hash.bulkCreate(hashesToSave, { ignoreDuplicates: true });
+                
+                // --- FIX: Implement chunking and delay for rate-limit safety ---
+                const chunkSize = 40; // Recommended chunk size by RD community
+                const allHashesToSave = [];
+
+                for (let i = 0; i < newHashes.length; i += chunkSize) {
+                    const chunk = newHashes.slice(i, i + chunkSize);
+                    logger.debug(`Checking RD cache status for chunk ${i / chunkSize + 1}...`);
+                    const availability = await rd.checkInstantAvailability(chunk);
+                    const chunkToSave = Object.keys(availability).map(hash => ({
+                        infohash: hash, is_rd_cached: availability[hash],
+                    }));
+                    allHashesToSave.push(...chunkToSave);
+                    
+                    // Add a polite delay between API calls
+                    if (i + chunkSize < newHashes.length) {
+                        await delay(500); // 0.5-second delay
+                    }
+                }
+                
+                await models.Hash.bulkCreate(allHashesToSave, { ignoreDuplicates: true });
+                logger.info(`Finished checking all new hashes. ${allHashesToSave.length} hashes updated in local DB.`);
             } else {
                 logger.info('No new infohashes found to check against Real-Debrid.');
             }
         }
-        // --- End Real-Debrid Logic ---
 
         let processedCount = 0;
         let skippedCount = 0;
 
         for (const threadData of allScrapedThreads) {
             const { thread_hash, raw_title, magnet_uris } = threadData;
-
             const existingThread = await models.Thread.findOne({ where: { raw_title } });
-
             if (existingThread) {
                 if (existingThread.thread_hash === thread_hash) {
                     skippedCount++;
@@ -86,18 +102,14 @@ const runFullWorkflow = async () => {
                     await existingThread.destroy();
                 }
             }
-            
             processedCount++;
             logger.info(`Processing new or updated thread: ${raw_title}`);
-
             const parsedTitle = parser.parseTitle(raw_title);
             if (!parsedTitle) {
                 await crud.logFailedThread(thread_hash, raw_title, 'Title parsing failed critically.');
                 continue;
             }
-
             const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year);
-
             if (tmdbData && tmdbData.dbEntry) {
                 const { dbEntry } = tmdbData;
                 await models.TmdbMetadata.upsert(dbEntry);
@@ -106,7 +118,6 @@ const runFullWorkflow = async () => {
                     year: parsedTitle.year, tmdb_id: dbEntry.tmdb_id, 
                     status: 'linked', magnet_uris: null
                 });
-
                 const streamsToCreate = [];
                 for (const magnet_uri of magnet_uris) {
                     const streamDetails = parser.parseMagnet(magnet_uri); 
@@ -134,12 +145,9 @@ const runFullWorkflow = async () => {
                     }
                 }
                 if (streamsToCreate.length > 0) {
-                    await models.Stream.bulkCreate(streamsToCreate, {
-                        updateOnDuplicate: ['quality', 'language', 'updatedAt']
-                    });
+                    await models.Stream.bulkCreate(streamsToCreate, { updateOnDuplicate: ['quality', 'language', 'updatedAt'] });
                     logger.info(`Upserted ${streamsToCreate.length} stream entries for ${parsedTitle.clean_title}`);
                 }
-
             } else {
                 logger.warn(`No TMDB match for "${parsedTitle.clean_title}". Saving as 'pending_tmdb'.`);
                 await crud.createOrUpdateThread({
@@ -149,13 +157,11 @@ const runFullWorkflow = async () => {
                 });
             }
         }
-
         logger.info({
             totalScraped: allScrapedThreads.length,
             newOrUpdated: processedCount,
             unchangedSkipped: skippedCount
         }, 'Processing complete.');
-
     } catch (error) {
         logger.error(error, "The crawling workflow encountered a fatal error.");
     } finally {
