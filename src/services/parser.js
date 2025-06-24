@@ -4,17 +4,33 @@ const logger = require('../utils/logger');
 
 // Regex patterns inspired by the provided example for maximum accuracy.
 const PARSING_PATTERNS = [
-    // Case 1: Full packs like S01EP(01-13) or S01 EP (01-15) or S01(E01-26)
     { regex: /S(\d{1,2})\s?EP?\s?\((\d{1,3})[-‑](\d{1,3})\)/i, type: 'EPISODE_PACK' },
-    // Case 2: Full packs like S02EP01-07 or S01E01-E16
     { regex: /S(\d{1,2})\s?E(\d{1,3})[-‑]E?(\d{1,3})/i, type: 'EPISODE_PACK' },
-    // Case 3: Full packs like S01EP01-04 (no space, no parens)
     { regex: /S(\d{1,2})EP(\d{1,3})[-‑](\d{1,3})/i, type: 'EPISODE_PACK' },
-    // Case 4: Single Episodes like S01EP16, S02 EP(06), or S03 EP07
     { regex: /S(\d{1,2})\s?EP?\(?(\d{1,3})\)?(?![-‑])/i, type: 'SINGLE_EPISODE' },
-    // Case 5: Season-only packs like S1, S02, or titles with "Complete" / "Season"
     { regex: /(?:S(eason)?\s*)(\d{1,2})(?!\s?E|\s?\d)|(Complete\sSeason|Season\s\d{1,2})/i, type: 'SEASON_PACK' }
 ];
+
+/**
+ * Expands a numeric range from a string, handling multiple formats.
+ * @param {string} rangeStr The string containing the range.
+ * @returns {number[]} An array of numbers.
+ */
+function expandEpisodeRange(rangeStr) {
+    const match = rangeStr.match(/(\d{1,3})[–-]\s*(\d{1,3})/);
+    if (!match) return [];
+    
+    const start = parseInt(match[1], 10);
+    const end = parseInt(match[2], 10);
+    const episodes = [];
+
+    if (!isNaN(start) && !isNaN(end) && end >= start) {
+        for (let i = start; i <= end; i++) {
+            episodes.push(i);
+        }
+    }
+    return episodes;
+}
 
 /**
  * Parses a thread title using PTT after cleaning it.
@@ -40,13 +56,10 @@ function parseTitle(rawTitle) {
  */
 function parseMagnet(magnetUri) {
     try {
+        const infohash = getInfohash(magnetUri); // Use the new helper
         const params = new URLSearchParams(magnetUri.split('?')[1]);
-        const infohash = params.get('xt')?.replace('urn:btih:', '');
         let filename = params.get('dn') || '';
-        if (!infohash || !filename) {
-            logger.warn({ magnetUri }, 'Magnet URI missing required parameters (xt, dn).');
-            return null;
-        }
+        if (!infohash || !filename) return null;
 
         filename = decodeURIComponent(filename).replace(/^www\.\w+\.\w+\s*-\s*/, '').trim();
 
@@ -57,7 +70,6 @@ function parseMagnet(magnetUri) {
             const match = filename.match(pattern.regex);
             if (match) {
                 if (pattern.type === 'SEASON_PACK') {
-                    // Use the captured season number or fallback to PTT's result
                     season = parseInt(match[1] || match[2]?.match(/\d+/)[0] || pttResult.season);
                     if (season) return { type: 'SEASON_PACK', infohash, season, quality: pttResult.resolution, language: pttResult.language };
                 } else if (pattern.type === 'SINGLE_EPISODE') {
@@ -73,7 +85,6 @@ function parseMagnet(magnetUri) {
             }
         }
         
-        // Fallback to PTT's results if no advanced pattern matched
         if (pttResult.season && pttResult.episode) {
             return { type: 'SINGLE_EPISODE', infohash, season: pttResult.season, episode: pttResult.episode, quality: pttResult.resolution, language: pttResult.language };
         }
@@ -90,4 +101,19 @@ function parseMagnet(magnetUri) {
     }
 }
 
-module.exports = { parseTitle, parseMagnet };
+/**
+ * Extracts the infohash from a magnet URI.
+ * @param {string} magnetUri The full magnet URI.
+ * @returns {string|null} The infohash or null if not found.
+ */
+function getInfohash(magnetUri) {
+    if (!magnetUri) return null;
+    const match = magnetUri.match(/btih:([a-fA-F0-9]{40})/);
+    return match ? match[1].toLowerCase() : null;
+}
+
+module.exports = { 
+    parseTitle, 
+    parseMagnet,
+    getInfohash // FIX: Export the new function
+};
