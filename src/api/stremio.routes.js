@@ -12,9 +12,8 @@ const { getTrackers } = require('../services/tracker');
 
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
-    // A bit of defensive coding to handle different object shapes
-    const qualityA = qualityOrder[a.quality] || qualityOrder[a.name?.split(' - ')[1]] || 99;
-    const qualityB = qualityOrder[b.quality] || qualityOrder[b.name?.split(' - ')[1]] || 99;
+    const qualityA = qualityOrder[a.quality] || 99;
+    const qualityB = qualityOrder[b.quality] || 99;
     return qualityA - qualityB;
 };
 
@@ -107,7 +106,6 @@ router.get('/meta/:type/:id.json', async (req, res) => {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 router.get('/rd-poll/:streamId.json', async (req, res) => {
-    // This endpoint remains correct and unchanged
     const { streamId } = req.params;
     if (!rd.isEnabled || !streamId) {
         return res.status(404).send('Not Found');
@@ -138,7 +136,6 @@ router.get('/rd-poll/:streamId.json', async (req, res) => {
 });
 
 router.get('/rd-add/:streamId.json', async (req, res) => {
-    // This endpoint remains correct and unchanged
     const { streamId } = req.params;
     if (!rd.isEnabled) return res.status(404).send('Not Found');
     try {
@@ -151,7 +148,10 @@ router.get('/rd-add/:streamId.json', async (req, res) => {
             await rd.selectFiles(rdResponse.id);
             res.redirect(`/rd-poll/${stream.id}.json`);
         } else {
-            throw new Error('Failed to add magnet to Real-Debrid, response did not contain an ID.');
+            // This might happen if the torrent was already active but we couldn't get the ID
+            // A more robust solution could search the user's torrent list by hash here.
+            // For now, we will ask the user to try again later.
+            res.status(503).json({ error: 'Torrent is already active or could not be added. Please try again in a moment.' });
         }
     } catch (error) {
         logger.error(error, `Failed to add stream ID ${streamId} to RD.`);
@@ -174,17 +174,17 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             if (!meta) return res.json({ streams: [] });
 
             const dbStreams = await models.Stream.findAll({
-                where: { tmdb_id: meta.tmdb_id, season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } },
-                include: config.isRdEnabled ? [{ model: models.Hash, required: false }] : []
+                where: { tmdb_id: meta.tmdb_id, season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
             });
 
-            if (config.isRdEnabled) {
+            if (rd.isEnabled) {
                 // Real-Debrid Logic for linked items
                 for (const stream of dbStreams) {
                     if (stream.rd_link) {
-                        finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${season}E${episode}\nCached on Real-Debrid` });
+                        finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${season}E${episode}\nCached on Real-Debrid`, quality: stream.quality });
                     } else {
-                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${season}E${episode}\nClick to download on Real-Debrid` });
+                        // In the on-demand model, we always present the option to download.
+                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${season}E${episode}\nClick to download to Real-Debrid`, quality: stream.quality });
                     }
                 }
             } else {
@@ -200,7 +200,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                 });
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            // --- Logic for Pending Items (always P2P) ---
+            // P2P Logic for Pending Items
             const idParts = requestedId.split(':');
             const threadId = idParts[1];
             if (threadId) {
@@ -210,27 +210,17 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         const parsed = parser.parseMagnet(magnet_uri);
                         if (!parsed) continue;
 
-                        // FIX: Format the parsed data into a proper Stremio stream object
                         const seasonStr = String(parsed.season).padStart(2, '0');
                         let episodeStr;
-                        let title;
+                        if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
+                        else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
+                        else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
 
-                        if (parsed.type === 'SEASON_PACK') {
-                            episodeStr = 'Season Pack';
-                            title = `[P2P] S${seasonStr} | ${episodeStr}\n${parsed.quality || 'SD'}`;
-                        } else if (parsed.type === 'EPISODE_PACK') {
-                            episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
-                            title = `[P2P] S${seasonStr} | ${episodeStr}\n${parsed.quality || 'SD'}`;
-                        } else {
-                            episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
-                            title = `[P2P] S${seasonStr}E${String(parsed.episode).padStart(2, '0')}\n${parsed.quality || 'SD'}`;
-                        }
-                        
                         finalStreams.push({
                             infoHash: parsed.infohash,
                             name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`,
-                            title: title,
-                            quality: parsed.quality // Add quality for sorting
+                            title: `S${seasonStr} | ${episodeStr}\n${parsed.quality || 'SD'}`,
+                            quality: parsed.quality
                         });
                     }
                 }
@@ -241,9 +231,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         
         finalStreams.sort(sortStreamsByQuality);
 
-        // Add sources and remove duplicates
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
-            index === self.findIndex((s) => s.infoHash === stream.infoHash)
+            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
         ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
