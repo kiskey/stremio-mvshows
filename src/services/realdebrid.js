@@ -32,17 +32,6 @@ if (!config.isRdEnabled) {
             throw error;
         }
     }
-    
-    // FIX: Implementing the missing function
-    async function findTorrentByHash(infohash) {
-        try {
-            const torrents = await rdApi.get('/torrents');
-            return torrents.data.find(t => t.hash.toLowerCase() === infohash.toLowerCase());
-        } catch(error) {
-            logger.error({ err: error.message }, `Failed to search user torrent list for hash.`);
-            return null;
-        }
-    }
 
     async function selectFiles(id, fileIds = 'all') {
         try {
@@ -63,28 +52,12 @@ if (!config.isRdEnabled) {
             throw error;
         }
     }
-    
-    async function addAndSelect(magnet) {
-        try {
-            const addResponse = await rdApi.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`);
-            if (addResponse.data && addResponse.data.id) {
-                await rdApi.post(`/torrents/selectFiles/${addResponse.data.id}`, `files=all`);
-                return await getTorrentInfo(addResponse.data.id);
-            }
-            return null;
-        } catch (error) {
-            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to add/select magnet.`);
-            return null;
-        }
-    }
 
     module.exports = {
         isEnabled: true,
         addMagnet,
         getTorrentInfo,
-        findTorrentByHash, // FIX: Exporting the function
         selectFiles,
         unrestrictLink,
-        addAndSelect
     };
 }
