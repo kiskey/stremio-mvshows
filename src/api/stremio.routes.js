@@ -125,7 +125,7 @@ router.get('/rd-poll/:streamId.json', async (req, res) => {
                     return res.redirect(302, unrestricted.download);
                 }
             }
-            await delay(5000);
+            await delay(10000);
         }
         await stream.update({ rd_status: 'error' });
         res.status(404).json({ error: 'Torrent timed out on Real-Debrid.' });
