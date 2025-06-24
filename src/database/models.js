@@ -9,8 +9,16 @@ module.exports = (sequelize) => {
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
         year: DataTypes.INTEGER,
-        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
-        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
+        tmdb_id: { 
+            type: DataTypes.STRING, 
+            references: { model: 'tmdb_metadata', key: 'tmdb_id' }, 
+            allowNull: true 
+        },
+        status: { 
+            type: DataTypes.STRING, 
+            defaultValue: 'linked',
+            allowNull: false
+        },
         magnet_uris: { type: DataTypes.JSON, allowNull: true },
         custom_poster: { type: DataTypes.STRING, allowNull: true },
         custom_description: { type: DataTypes.TEXT, allowNull: true },
@@ -40,7 +48,10 @@ module.exports = (sequelize) => {
     }, { 
         tableName: 'streams', 
         timestamps: true,
-        indexes: [{ unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] }]
+        indexes: [{ 
+            unique: true, 
+            fields: ['tmdb_id', 'season', 'episode', 'infohash'] 
+        }]
     });
 
     const FailedThread = sequelize.define('FailedThread', {
