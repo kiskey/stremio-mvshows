@@ -20,7 +20,7 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "4.1.0", // Final Stable Release
+        version: "5.0.0", // Final Stable Release
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -103,6 +103,72 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     }
 });
 
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+router.get('/rd-poll/:streamId/:episode.json', async (req, res) => {
+    const { streamId, episode } = req.params;
+    if (!rd.isEnabled || !streamId) {
+        return res.status(404).send('Not Found');
+    }
+    try {
+        const stream = await models.Stream.findByPk(streamId);
+        if (!stream || !stream.rd_id) {
+            return res.status(404).json({ error: 'Stream not found or not processing on RD.' });
+        }
+        for (let i = 0; i < 36; i++) { // Poll for up to 3 minutes
+            const torrentInfo = await rd.getTorrentInfo(stream.rd_id);
+            if (torrentInfo && torrentInfo.status === 'downloaded') {
+                const episodeFile = torrentInfo.files.find(file => {
+                    const epMatch = file.path.match(/e(\d{1,3})/i);
+                    return epMatch && parseInt(epMatch[1]) === parseInt(episode);
+                }) || torrentInfo.files.sort((a,b) => b.bytes - a.bytes)[0];
+
+                if (episodeFile && torrentInfo.links && torrentInfo.links.length > 0) {
+                    const unrestricted = await rd.unrestrictLink(torrentInfo.links[0]);
+                    await stream.update({ rd_status: 'downloaded', rd_link: unrestricted.download, rd_last_checked: new Date() });
+                    return res.redirect(302, unrestricted.download);
+                }
+            }
+            await delay(5000); // Wait 5 seconds
+        }
+        await stream.update({ rd_status: 'error' });
+        res.status(404).json({ error: 'Torrent timed out on Real-Debrid.' });
+    } catch (error) {
+        logger.error(error, `Polling failed for stream ID: ${streamId}`);
+        res.status(500).json({ error: 'Polling failed.' });
+    }
+});
+
+router.get('/rd-add/:streamId/:episode.json', async (req, res) => {
+    const { streamId, episode } = req.params;
+    if (!rd.isEnabled) return res.status(404).send('Not Found');
+    let stream;
+    try {
+        stream = await models.Stream.findByPk(streamId);
+        if (!stream) {
+            return res.status(404).json({ error: 'Stream not found.' });
+        }
+        if (stream.rd_id || stream.rd_status === 'adding_to_rd') {
+            return res.redirect(`/rd-poll/${stream.id}/${episode}.json`);
+        }
+        await stream.update({ rd_status: 'adding_to_rd' });
+        const magnet = `magnet:?xt=urn:btih:${stream.infohash}`;
+        const rdResponse = await rd.addMagnet(magnet);
+        if (rdResponse && rdResponse.id) {
+            await stream.update({ rd_id: rdResponse.id, rd_status: 'downloading' });
+            await rd.selectFiles(rdResponse.id);
+            res.redirect(`/rd-poll/${stream.id}/${episode}.json`);
+        } else {
+            await stream.update({ rd_status: null });
+            res.status(503).json({ error: 'Could not add torrent to Real-Debrid at this time.' });
+        }
+    } catch (error) {
+        logger.error(error, `Failed to add stream ID ${streamId} to RD.`);
+        if (stream) await stream.update({ rd_status: null });
+        res.status(500).json({ error: 'Could not add torrent to Real-Debrid.' });
+    }
+});
+
 router.get('/stream/:type/:id.json', async (req, res) => {
     if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
@@ -118,32 +184,24 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             if (!meta) return res.json({ streams: [] });
 
             const dbStreams = await models.Stream.findAll({
-                where: { tmdb_id: meta.tmdb_id, season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
+                where: { tmdb_id: meta.tmdb_id, season: season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
             });
 
-            if (rd.isEnabled) {
-                // --- REAL-DEBRID LOGIC (fileIdx method) ---
+            if (config.isRdEnabled) {
                 for (const stream of dbStreams) {
-                    const torrentInfo = await rd.addAndSelect(`magnet:?xt=urn:btih:${stream.infohash}`);
-                    if (!torrentInfo || !torrentInfo.files) continue;
-
-                    const episodeFile = torrentInfo.files.find(file => {
-                        const epMatch = file.path.match(/e(\d{1,3})/i);
-                        return epMatch && parseInt(epMatch[1]) === parseInt(episode);
-                    });
-
-                    if (episodeFile) {
-                        finalStreams.push({
-                            name: `[RD+] ${stream.quality} ⚡️`,
-                            title: `S${String(stream.season).padStart(2, '0')}E${String(episode).padStart(2, '0')}\n${episodeFile.path.substring(1)}`,
-                            infoHash: stream.infohash,
-                            fileIdx: episodeFile.id,
-                            quality: stream.quality
-                        });
+                    const seasonStr = String(stream.season).padStart(2, '0');
+                    let episodeStr;
+                    if (!stream.episode_end || stream.episode_end === stream.episode) episodeStr = `Episode ${String(stream.episode).padStart(2, '0')}`;
+                    else if (stream.episode === 1 && stream.episode_end === 999) episodeStr = 'Season Pack';
+                    else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
+                    
+                    if (stream.rd_link) {
+                        finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${seasonStr} | ${episodeStr}\nCached on Real-Debrid`, quality: stream.quality });
+                    } else {
+                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nClick to download to Real-Debrid`, quality: stream.quality });
                     }
                 }
             } else {
-                // --- P2P LOGIC ---
                 finalStreams = dbStreams.map(s => {
                     const seasonStr = String(s.season).padStart(2, '0');
                     let episodeStr;
@@ -155,7 +213,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                 });
             }
         } else if (requestedId.startsWith(config.addonId)) {
-            // --- P2P Logic for Pending Items ---
             const idParts = requestedId.split(':');
             const threadId = idParts[1];
             if (threadId) {
@@ -186,14 +243,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         finalStreams.sort(sortStreamsByQuality);
 
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
-            index === self.findIndex((s) => s.infoHash === stream.infoHash && s.fileIdx === stream.fileIdx)
-        ).map(s => {
-            // If it's an RD stream, Stremio handles it. If P2P, we add trackers.
-            if (s.fileIdx !== undefined) {
-                return s;
-            }
-            return { ...s, sources: [ `dht:${s.infoHash}`, ...getTrackers() ] };
-        });
+            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
+        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infohash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
 
@@ -202,6 +253,5 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         res.status(500).json({ streams: [], error: error.message });
     }
 });
-
 
 module.exports = router;
