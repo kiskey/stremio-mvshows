@@ -18,7 +18,7 @@ if (!config.isRdEnabled) {
             const response = await rdApi.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`);
             return response.data;
         } catch (error) {
-            logger.error({ err: error.message, magnet }, 'Failed to add magnet to Real-Debrid.');
+            logger.error({ err: error.response ? error.response.data : error.message, magnet }, 'Failed to add magnet to Real-Debrid.');
             throw error;
         }
     }
@@ -28,14 +28,14 @@ if (!config.isRdEnabled) {
             const response = await rdApi.get(`/torrents/info/${id}`);
             return response.data;
         } catch (error) {
-            logger.error({ err: error.message }, `Failed to get torrent info for ID: ${id}`);
+            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to get torrent info for ID: ${id}`);
             throw error;
         }
     }
     
-    // NEW HELPER FUNCTION
     async function findTorrentByHash(infohash) {
         try {
+            // This is a workaround as RD doesn't have a direct hash lookup in user's torrents
             const torrents = await rdApi.get('/torrents');
             return torrents.data.find(t => t.hash.toLowerCase() === infohash.toLowerCase());
         } catch(error) {
@@ -49,7 +49,7 @@ if (!config.isRdEnabled) {
             await rdApi.post(`/torrents/selectFiles/${id}`, `files=${fileIds}`);
             return true;
         } catch (error) {
-            logger.error({ err: error.message }, `Failed to select files for torrent ID: ${id}`);
+            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to select files for torrent ID: ${id}`);
             throw error;
         }
     }
@@ -59,7 +59,7 @@ if (!config.isRdEnabled) {
             const response = await rdApi.post('/unrestrict/link', `link=${link}`);
             return response.data;
         } catch (error) {
-            logger.error({ err: error.message }, `Failed to unrestrict link: ${link}`);
+            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to unrestrict link: ${link}`);
             throw error;
         }
     }
@@ -70,6 +70,6 @@ if (!config.isRdEnabled) {
         getTorrentInfo,
         findTorrentByHash,
         selectFiles,
-        unrestrictLink
+        unrestrictLink,
     };
 }
