@@ -13,16 +13,11 @@ if (!config.isRdEnabled) {
         timeout: 15000
     });
 
-    async function addMagnet(magnet) {
-        try {
-            const response = await rdApi.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`);
-            return response.data;
-        } catch (error) {
-            logger.error({ err: error.response ? error.response.data : error.message, magnet }, 'Failed to add magnet to Real-Debrid.');
-            throw error;
-        }
-    }
-
+    /**
+     * Retrieves detailed information about a torrent from Real-Debrid.
+     * @param {string} id - The Real-Debrid internal torrent ID.
+     * @returns {Promise<object>} The full torrent info object.
+     */
     async function getTorrentInfo(id) {
         try {
             const response = await rdApi.get(`/torrents/info/${id}`);
@@ -33,43 +28,28 @@ if (!config.isRdEnabled) {
         }
     }
     
-    async function findTorrentByHash(infohash) {
+    /**
+     * Adds a magnet and selects all files. Returns the RD torrent object.
+     * @param {string} magnet - The magnet URI.
+     * @returns {Promise<object|null>} The RD torrent object.
+     */
+    async function addAndSelect(magnet) {
         try {
-            // This is a workaround as RD doesn't have a direct hash lookup in user's torrents
-            const torrents = await rdApi.get('/torrents');
-            return torrents.data.find(t => t.hash.toLowerCase() === infohash.toLowerCase());
-        } catch(error) {
-            logger.error({ err: error.message }, `Failed to search for torrent hash.`);
+            const addResponse = await rdApi.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`);
+            if (addResponse.data && addResponse.data.id) {
+                await rdApi.post(`/torrents/selectFiles/${addResponse.data.id}`, `files=all`);
+                return await getTorrentInfo(addResponse.data.id);
+            }
             return null;
-        }
-    }
-
-    async function selectFiles(id, fileIds = 'all') {
-        try {
-            await rdApi.post(`/torrents/selectFiles/${id}`, `files=${fileIds}`);
-            return true;
         } catch (error) {
-            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to select files for torrent ID: ${id}`);
-            throw error;
-        }
-    }
-
-    async function unrestrictLink(link) {
-        try {
-            const response = await rdApi.post('/unrestrict/link', `link=${link}`);
-            return response.data;
-        } catch (error) {
-            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to unrestrict link: ${link}`);
-            throw error;
+            logger.error({ err: error.response ? error.response.data : error.message }, `Failed to add/select magnet.`);
+            return null;
         }
     }
 
     module.exports = {
         isEnabled: true,
-        addMagnet,
         getTorrentInfo,
-        findTorrentByHash,
-        selectFiles,
-        unrestrictLink,
+        addAndSelect
     };
 }
