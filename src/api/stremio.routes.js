@@ -20,7 +20,7 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: config.addonVersion,
+        version: "3.0.0", // Final Version
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -166,34 +166,44 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
     try {
         if (requestedId.startsWith('tt')) {
+            // --- Logic for Officially Linked Items ---
             const [imdb_id, season, episode] = requestedId.split(':');
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (!meta) return res.json({ streams: [] });
 
             const dbStreams = await models.Stream.findAll({
-                where: { tmdb_id: meta.tmdb_id, season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
+                where: { tmdb_id: meta.tmdb_id, season: season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
             });
 
-            if (rd.isEnabled) {
+            if (config.isRdEnabled) {
+                // Real-Debrid Logic
                 for (const stream of dbStreams) {
+                    const seasonStr = String(stream.season).padStart(2, '0');
+                    let episodeStr;
+                    if (!stream.episode_end || stream.episode_end === stream.episode) episodeStr = `Episode ${String(stream.episode).padStart(2, '0')}`;
+                    else if (stream.episode === 1 && stream.episode_end === 999) episodeStr = 'Season Pack';
+                    else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
+
                     if (stream.rd_link) {
-                        finalStreams.push({ name: `[TamilMv - RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${season}E${episode}\nCached on Real-Debrid`, quality: stream.quality });
+                        finalStreams.push({ name: `[TamilMV - RD+] ${stream.quality} ⚡️`, url: stream.rd_link, title: `S${seasonStr} | ${episodeStr}\nCached on Real-Debrid`, quality: stream.quality });
                     } else {
-                        // FIX: Use the configured appHost for the polling URL
-                        finalStreams.push({ name: `[TamilMV - RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${season}E${episode}\nClick to download on Real-Debrid`, quality: stream.quality });
+                        finalStreams.push({ name: `[TamilMV - RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.id}.json`, title: `S${seasonStr} | ${episodeStr}\nClick to download to Real-Debrid`, quality: stream.quality });
                     }
                 }
             } else {
+                // P2P Logic
                 finalStreams = dbStreams.map(s => {
                     const seasonStr = String(s.season).padStart(2, '0');
                     let episodeStr;
                     if (!s.episode_end || s.episode_end === s.episode) episodeStr = `Episode ${String(s.episode).padStart(2, '0')}`;
                     else if (s.episode === 1 && s.episode_end === 999) episodeStr = 'Season Pack';
                     else episodeStr = `Episodes ${String(s.episode).padStart(2, '0')}-${String(s.episode_end).padStart(2, '0')}`;
+                    
                     return { infoHash: s.infohash, name: `[TamilMV - P2P] - ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
                 });
             }
         } else if (requestedId.startsWith(config.addonId)) {
+            // P2P Logic for Pending Items
             const idParts = requestedId.split(':');
             const threadId = idParts[1];
             if (threadId) {
@@ -202,11 +212,13 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     for (const magnet_uri of thread.magnet_uris) {
                         const parsed = parser.parseMagnet(magnet_uri);
                         if (!parsed) continue;
+                        
                         const seasonStr = String(parsed.season).padStart(2, '0');
                         let episodeStr;
                         if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
                         else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
                         else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
+                        
                         finalStreams.push({
                             infoHash: parsed.infohash,
                             name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`,
