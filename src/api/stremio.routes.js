@@ -114,7 +114,7 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             return res.status(404).json({ error: 'Torrent not being processed.' });
         }
 
-        for (let i = 0; i < 36; i++) {
+        for (let i = 0; i < 36; i++) { // Poll for up to 3 minutes
             const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
@@ -161,10 +161,11 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
         const rdResponse = await rd.addMagnet(magnet);
         
         if (rdResponse && rdResponse.id) {
+            // This is the database lock. Create the record BEFORE redirecting.
             await models.RdTorrent.create({
                 infohash: infohash,
                 rd_id: rdResponse.id,
-                status: 'downloading'
+                status: 'adding'
             });
             await rd.selectFiles(rdResponse.id);
             res.redirect(`/rd-poll/${infohash}/${episode}.json`);
@@ -269,7 +270,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
             index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
-        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
+        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infohash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
 
