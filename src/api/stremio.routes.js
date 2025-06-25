@@ -19,7 +19,7 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "10.0.0", // Final Stable Release
+        version: "10.2.0", // Final Stable Release
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -114,16 +114,15 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             return res.status(404).json({ error: 'Torrent not being processed.' });
         }
 
-        for (let i = 0; i < 36; i++) { // Poll for up to 3 minutes
+        for (let i = 0; i < 36; i++) {
             const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
             if (torrentInfo && torrentInfo.status === 'downloaded') {
-                logger.info({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} finished downloading. Persisting file list.`);
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
 
                 let episodeFileIndex = -1;
                 const episodeFile = torrentInfo.files.find((file, index) => {
-                    const epMatch = file.path.match(/[Ee](\d{1,3})/);
-                    const found = epMatch && parseInt(epMatch[1]) === parseInt(episode);
+                    const epMatch = file.path.match(/(?:s?e|ep|episode|x)[ ._-]?(\d{1,3})(?:[^0-9]|$)|(?:^|[ ._-])(\d{1,3})(?:\s?[&-+]\s?\d{1,3})*(?:[^0-9]|$)|(?:^|[ ._-])(\d{2})(?:[^0-9]|$)/i);
+                    const found = epMatch && (parseInt(epMatch[1]) === parseInt(episode) || parseInt(epMatch[2]) === parseInt(episode) || parseInt(epMatch[3]) === parseInt(episode));
                     if (found) episodeFileIndex = index;
                     return found;
                 });
@@ -134,7 +133,6 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     const unrestricted = await rd.unrestrictLink(linkToUnrestrict);
                     return res.redirect(302, unrestricted.download);
                 } else {
-                    logger.error({ torrentInfo, episode }, 'Could not find matching file or link for downloaded torrent.');
                     break;
                 }
             }
@@ -209,23 +207,19 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
 
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash, files: rdTorrent.files });
-                        
                         let episodeFileIndex = -1;
                         const episodeFile = rdTorrent.files.find((file, index) => {
-                            const epMatch = file.path.match(/[Ee](\d{1,3})/);
-                            const found = epMatch && parseInt(epMatch[1]) === parseInt(episode);
+                            const epMatch = file.path.match(/(?:s?e|ep|episode|x)[ ._-]?(\d{1,3})(?:[^0-9]|$)|(?:^|[ ._-])(\d{1,3})(?:\s?[&-+]\s?\d{1,3})*(?:[^0-9]|$)|(?:^|[ ._-])(\d{2})(?:[^0-9]|$)/i);
+                            const found = epMatch && (parseInt(epMatch[1]) === parseInt(episode) || parseInt(epMatch[2]) === parseInt(episode) || parseInt(epMatch[3]) === parseInt(episode));
                             if (found) episodeFileIndex = index;
                             return found;
                         });
 
                         if (episodeFile && episodeFileIndex !== -1 && rdTorrent.links[episodeFileIndex]) {
                             const linkToUnrestrict = rdTorrent.links[episodeFileIndex];
-                            logger.info({ message: 'Found matching file for instant playback.', requestedEpisode: episode, foundFile: episodeFile.path, linkToUnrestrict });
                             const unrestricted = await rd.unrestrictLink(linkToUnrestrict);
                             finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `S${seasonStr} | ${episodeStr}\n${episodeFile.path.substring(1)}`, quality: stream.quality });
                         } else {
-                            logger.warn({ requestedEpisode: episode, files: rdTorrent.files }, 'File for requested episode not found in downloaded torrent, offering re-download.');
                             finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nFile not found, click to re-process`, quality: stream.quality });
                         }
                     } else {
