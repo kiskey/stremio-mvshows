@@ -128,7 +128,8 @@ router.get('/rd-poll/:streamId/:episode.json', async (req, res) => {
                     const linkToUnrestrict = torrentInfo.links[episodeFileIndex];
                     const unrestricted = await rd.unrestrictLink(linkToUnrestrict);
                     await models.UnrestrictedLink.upsert({
-                        stream_id: stream.id, episode: episode,
+                        stream_id: stream.id,
+                        episode: episode,
                         link: unrestricted.download,
                         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
                     });
