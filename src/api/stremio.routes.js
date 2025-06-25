@@ -16,20 +16,16 @@ const sortStreamsByQuality = (a, b) => {
     return qualityA - qualityB;
 };
 
+// This helper uses parse-torrent-title, which is robust for this task.
 function findEpisodeInPath(path) {
-    // This robust regex handles S01E01, 1x01, ep 1, episode.1, .1., etc.
-    const match = path.match(/(?:S\d{1,2}[Eex]|EP(?:isode)?[._\s]?)(\d{1,3})|(?<!\d[._\s])(\d{1,3})(?![._\s]\d)/i);
-    if (match) {
-        // Return the first non-null capture group
-        return parseInt(match[1] || match[2], 10);
-    }
-    return null;
+    const pttResult = parser.parse(path);
+    return pttResult.episode || null;
 }
 
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "11.0.0", // Final Stable Release
+        version: "12.0.0", // The Final Correct Release
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'], 
@@ -219,7 +215,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
 
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash });
+                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash, files: rdTorrent.files });
                         
                         let episodeFileIndex = -1;
                         const episodeFile = rdTorrent.files.find((file, index) => {
@@ -285,7 +281,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
             index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
-        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
+        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infohash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
 
