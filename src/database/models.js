@@ -1,5 +1,6 @@
 // src/database/models.js
 const { DataTypes } = require('sequelize');
+const config = require('../config/config');
 
 module.exports = (sequelize) => {
     const Thread = sequelize.define('Thread', {
@@ -54,5 +55,6 @@ module.exports = (sequelize) => {
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'failed_threads', timestamps: false });
     
+    // This return statement is what exports all the models correctly.
     return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent };
 };
