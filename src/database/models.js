@@ -1,6 +1,5 @@
 // src/database/models.js
 const { DataTypes } = require('sequelize');
-const config = require('../config/config');
 
 module.exports = (sequelize) => {
     const Thread = sequelize.define('Thread', {
@@ -9,16 +8,8 @@ module.exports = (sequelize) => {
         raw_title: { type: DataTypes.STRING, allowNull: false },
         clean_title: DataTypes.STRING,
         year: DataTypes.INTEGER,
-        tmdb_id: { 
-            type: DataTypes.STRING, 
-            references: { model: 'tmdb_metadata', key: 'tmdb_id' }, 
-            allowNull: true 
-        },
-        status: { 
-            type: DataTypes.STRING, 
-            defaultValue: 'linked',
-            allowNull: false
-        },
+        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
+        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
         magnet_uris: { type: DataTypes.JSON, allowNull: true },
         custom_poster: { type: DataTypes.STRING, allowNull: true },
         custom_description: { type: DataTypes.TEXT, allowNull: true },
@@ -36,26 +27,23 @@ module.exports = (sequelize) => {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         tmdb_id: { type: DataTypes.STRING, allowNull: false },
         season: { type: DataTypes.INTEGER, allowNull: false },
-        episode: { type: DataTypes.INTEGER, allowNull: false, comment: "Starting episode number of a pack" },
-        episode_end: { type: DataTypes.INTEGER, allowNull: true, comment: "Ending episode number, same as episode for single episodes" },
+        episode: { type: DataTypes.INTEGER, allowNull: false },
+        episode_end: { type: DataTypes.INTEGER, allowNull: true },
         infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
         quality: DataTypes.STRING,
         language: DataTypes.STRING,
     }, { 
         tableName: 'streams', 
         timestamps: true,
-        indexes: [{ 
-            unique: true, 
-            fields: ['tmdb_id', 'season', 'episode', 'infohash'] 
-        }]
+        indexes: [{ unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] }]
     });
 
-    // NEW TABLE: The source of truth for Real-Debrid torrent status and file lists
     const RdTorrent = sequelize.define('RdTorrent', {
         infohash: { type: DataTypes.STRING, primaryKey: true },
         rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
-        status: { type: DataTypes.STRING, allowNull: false, comment: 'e.g., downloading, downloaded, error' },
-        files: { type: DataTypes.JSON, allowNull: true, comment: 'The complete files array from the RD API' },
+        status: { type: DataTypes.STRING, allowNull: false },
+        files: { type: DataTypes.JSON, allowNull: true },
+        links: { type: DataTypes.JSON, allowNull: true },
         last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'rd_torrents', timestamps: true });
 
