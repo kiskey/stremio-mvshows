@@ -8,6 +8,7 @@ const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const parser = require('../services/parser');
 const { getTrackers } = require('../services/tracker');
+const ptt = require('parse-torrent-title'); // Use the library directly as requested
 
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
@@ -15,12 +16,6 @@ const sortStreamsByQuality = (a, b) => {
     const qualityB = qualityOrder[b.quality] || 99;
     return qualityA - qualityB;
 };
-
-// This helper uses parse-torrent-title, which is robust for this task.
-function findEpisodeInPath(path) {
-    const pttResult = parser.parse(path);
-    return pttResult.episode || null;
-}
 
 router.get('/manifest.json', (req, res) => {
     const manifest = {
@@ -128,8 +123,10 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
 
                 let episodeFileIndex = -1;
                 const episodeFile = torrentInfo.files.find((file, index) => {
-                    const foundEpisode = findEpisodeInPath(file.path);
+                    const pttResult = ptt.parse(file.path);
+                    const foundEpisode = pttResult.episode;
                     const isMatch = foundEpisode === parseInt(episode);
+                    logger.debug({ filePath: file.path, requestedEp: episode, foundEp: foundEpisode, isMatch }, 'Checking file for episode match');
                     if (isMatch) episodeFileIndex = index;
                     return isMatch;
                 });
@@ -215,12 +212,14 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
 
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash, files: rdTorrent.files });
+                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash });
                         
                         let episodeFileIndex = -1;
                         const episodeFile = rdTorrent.files.find((file, index) => {
-                            const foundEpisode = findEpisodeInPath(file.path);
+                            const pttResult = ptt.parse(file.path);
+                            const foundEpisode = pttResult.episode;
                             const isMatch = foundEpisode === parseInt(episode);
+                            logger.debug({ filePath: file.path, requestedEp: episode, foundEp: foundEpisode, isMatch }, 'Checking file for episode match');
                             if (isMatch) episodeFileIndex = index;
                             return isMatch;
                         });
