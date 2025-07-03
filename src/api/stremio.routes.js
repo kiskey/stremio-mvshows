@@ -8,7 +8,7 @@ const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const parser = require('../services/parser');
 const { getTrackers } = require('../services/tracker');
-const ptt = require('parse-torrent-title'); // Use the library directly as requested
+const ptt = require('parse-torrent-title');
 
 const qualityOrder = { '4K': 1, '2160p': 1, '1080p': 2, '720p': 3, '480p': 4, 'SD': 5 };
 const sortStreamsByQuality = (a, b) => {
@@ -20,16 +20,17 @@ const sortStreamsByQuality = (a, b) => {
 router.get('/manifest.json', (req, res) => {
     const manifest = {
         id: config.addonId,
-        version: "12.0.0", // The Final Correct Release
+        version: "12.0.0",
         name: config.addonName,
         description: config.addonDescription,
-        resources: ['catalog', 'stream', 'meta'], 
-        types: ['series'], 
-        idPrefixes: ['tt', config.addonId], 
+        resources: ['catalog', 'stream', 'meta'],
+        types: ['series'],
+        // This tells Stremio we are responsible for our own ID prefix and avoids conflicts.
+        idPrefixes: [config.addonId], 
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
-            name: 'TamilMV WebSeries',
+            name: 'Forum TV Shows',
             extra: [{ "name": "skip", "isRequired": false }]
         }],
         behaviorHints: { configurable: false, adult: false }
@@ -58,18 +59,27 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
             order: [['updatedAt', 'DESC']],
         });
         const [linkedMetasRaw, pendingThreads] = await Promise.all([linkedMetasPromise, pendingThreadsPromise]);
+        
         const linkedMetas = linkedMetasRaw.map(meta => {
             const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
             return {
-                id: meta.imdb_id, type: 'series', name: parsedData.title,
+                // --- FIX: Use our addon's custom ID prefix ---
+                id: `${config.addonId}:${meta.imdb_id}`, 
+                type: 'series',
+                name: parsedData.title,
                 poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
             };
         });
+
         const pendingMetas = pendingThreads.map(thread => ({
-            id: `${config.addonId}:${thread.id}`, type: 'series', name: `[PENDING] ${thread.clean_title}`,
+            // --- FIX: Use a consistent custom ID prefix for pending items ---
+            id: `${config.addonId}:pending:${thread.id}`, 
+            type: 'series',
+            name: `[PENDING] ${thread.clean_title}`,
             poster: thread.custom_poster || config.placeholderPoster,
             description: thread.custom_description || `This item is pending an official metadata match.`
         }));
+
         const allMetas = [...linkedMetas, ...pendingMetas];
         const paginatedMetas = allMetas.slice(skip, skip + limit);
         res.json({ metas: paginatedMetas });
@@ -79,72 +89,19 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     }
 });
 
-// --- DEFINITIVE FIX FOR METADATA ---
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
-    if (type !== 'series') {
+    if (type !== 'series' || !id.startsWith(config.addonId)) {
         return res.status(404).json({ err: 'Not Found' });
     }
 
     try {
-        // --- LOGIC FOR LINKED (tt...) ITEMS ---
-        if (id.startsWith('tt')) {
-            const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: id } });
+        const idParts = id.split(':');
+        const itemTypeOrImdbId = idParts[1];
 
-            if (!metaRecord) {
-                return res.status(404).json({ err: 'Metadata not found in local database for this ID.' });
-            }
-
-            // Find all available episodes for this series to build the episode list
-            const streams = await models.Stream.findAll({
-                where: { tmdb_id: metaRecord.tmdb_id },
-                attributes: ['season', 'episode', 'episode_end'], // Only fetch what we need
-                order: [['season', 'ASC'], ['episode', 'ASC']],
-                raw: true,
-            });
-
-            const videos = [];
-            const uniqueEpisodes = new Set();
-            for (const s of streams) {
-                const episodeStart = s.episode;
-                // Handle cases where episode_end might be null for single episodes
-                const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
-
-                for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
-                    const uniqueKey = `s${s.season}e${epNum}`;
-                    if (uniqueEpisodes.has(uniqueKey)) continue;
-
-                    videos.push({
-                        season: s.season,
-                        episode: epNum,
-                        id: `${id}:${s.season}:${epNum}`,
-                        title: `Episode ${epNum}`,
-                        // Using a placeholder is fine, Stremio primarily uses the season/episode numbers
-                        released: new Date(metaRecord.year, s.season - 1, epNum).toISOString() 
-                    });
-                    uniqueEpisodes.add(uniqueKey);
-                }
-            }
-
-            const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
-
-            const metaObject = {
-                id: id,
-                type: 'series',
-                name: tmdbData.title,
-                poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
-                background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
-                description: tmdbData.overview,
-                releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
-                year: metaRecord.year,
-                videos: videos // Crucial for building the episode grid
-            };
-            return res.json({ meta: metaObject });
-        }
-
-        // --- LOGIC FOR PENDING (custom id) ITEMS (Unchanged) ---
-        if (id.startsWith(config.addonId)) {
-            const threadId = id.split(':')[1];
+        // --- Logic for Pending Items ---
+        if (itemTypeOrImdbId === 'pending') {
+            const threadId = idParts[2];
             const thread = await models.Thread.findByPk(threadId);
             if (!thread || thread.status !== 'pending_tmdb') {
                 return res.status(404).json({ err: 'Pending item not found' });
@@ -157,8 +114,56 @@ router.get('/meta/:type/:id.json', async (req, res) => {
             };
             return res.json({ meta: metaObject });
         }
+
+        // --- Logic for Linked Items (tt...) ---
+        if (itemTypeOrImdbId.startsWith('tt')) {
+            const imdb_id = itemTypeOrImdbId;
+            const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id } });
+
+            if (!metaRecord) {
+                return res.status(404).json({ err: 'Metadata not found in local database for this ID.' });
+            }
+
+            const streams = await models.Stream.findAll({
+                where: { tmdb_id: metaRecord.tmdb_id },
+                attributes: ['season', 'episode', 'episode_end'],
+                order: [['season', 'ASC'], ['episode', 'ASC']],
+                raw: true,
+            });
+
+            const videos = [];
+            const uniqueEpisodes = new Set();
+            for (const s of streams) {
+                const episodeStart = s.episode;
+                const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
+                for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
+                    const uniqueKey = `s${s.season}e${epNum}`;
+                    if (uniqueEpisodes.has(uniqueKey)) continue;
+
+                    videos.push({
+                        season: s.season,
+                        episode: epNum,
+                        id: `${id}:${s.season}:${epNum}`,
+                        title: `Episode ${epNum}`,
+                        released: new Date(metaRecord.year, s.season - 1, epNum).toISOString() 
+                    });
+                    uniqueEpisodes.add(uniqueKey);
+                }
+            }
+
+            const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
+            const metaObject = {
+                id: id, type: 'series', name: tmdbData.title,
+                poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
+                background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
+                description: tmdbData.overview,
+                releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
+                year: metaRecord.year,
+                videos: videos,
+            };
+            return res.json({ meta: metaObject });
+        }
         
-        // If the ID format is unrecognized
         return res.status(404).json({ err: 'Invalid ID format' });
 
     } catch (error) {
@@ -166,7 +171,6 @@ router.get('/meta/:type/:id.json', async (req, res) => {
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
-
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -180,18 +184,18 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             return res.status(404).json({ error: 'Torrent not being processed.' });
         }
 
-        const pollTimeout = 180000; // 3 minutes
-        const pollInterval = 5000;  // 5 seconds
+        const pollTimeout = 180000;
+        const pollInterval = 5000;
         const startTime = Date.now();
 
         while (Date.now() - startTime < pollTimeout) {
             const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
-
+            
             if (torrentInfo && (torrentInfo.status === 'error' || torrentInfo.status === 'magnet_error')) {
                 logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
-                break; // Exit the loop on terminal failure
+                break;
             }
-
+            
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 logger.info({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} finished downloading. Persisting file list.`);
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
@@ -218,14 +222,15 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             }
             await delay(pollInterval);
         }
+        
         await rdTorrent.update({ status: 'error' });
         res.status(404).json({ error: 'Torrent timed out or failed on Real-Debrid.' });
+
     } catch (error) {
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
     }
 });
-
 
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     const { infohash, episode } = req.params;
@@ -257,9 +262,8 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     }
 });
 
-
 router.get('/stream/:type/:id.json', async (req, res) => {
-    if (req.params.type !== 'series') {
+    if (req.params.type !== 'series' || !req.params.id.startsWith(config.addonId)) {
         return res.status(404).json({ streams: [] });
     }
     
@@ -267,16 +271,18 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     let finalStreams = [];
 
     try {
-        if (requestedId.startsWith('tt')) {
-            const [imdb_id, season, episode] = requestedId.split(':');
+        const idParts = requestedId.split(':');
+        
+        if (idParts.length < 4) {
+            // This request is for the series root (e.g., org.stremio...:tt12345), not a specific episode.
+            return res.json({ streams: [] });
+        }
 
-            // --- DEFENSIVE FIX FOR STREAM ROUTE ---
-            // If the request is for the series root (e.g., 'tt12345'), there is no
-            // video to play. The correct response is an empty stream list. This prevents a crash.
-            if (!season || !episode) {
-                return res.json({ streams: [] });
-            }
-
+        const imdb_id = idParts[1];
+        const season = idParts[2];
+        const episode = idParts[3];
+        
+        if (imdb_id.startsWith('tt')) {
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (!meta) return res.json({ streams: [] });
 
@@ -295,25 +301,22 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
 
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-                        logger.info({ message: "Found downloaded torrent in local DB. Parsing persisted file list.", infohash: stream.infohash });
+                        logger.info({ message: "Found downloaded torrent in local DB.", infohash: stream.infohash });
                         
                         let episodeFileIndex = -1;
                         const episodeFile = rdTorrent.files.find((file, index) => {
                             const pttResult = ptt.parse(file.path);
                             const foundEpisode = pttResult.episode;
                             const isMatch = foundEpisode === parseInt(episode);
-                            logger.debug({ filePath: file.path, requestedEp: episode, foundEp: foundEpisode, isMatch }, 'Checking file for episode match');
                             if (isMatch) episodeFileIndex = index;
                             return isMatch;
                         });
 
                         if (episodeFile && episodeFileIndex !== -1 && rdTorrent.links[episodeFileIndex]) {
                             const linkToUnrestrict = rdTorrent.links[episodeFileIndex];
-                            logger.info({ message: 'Found matching file for instant playback.', requestedEpisode: episode, foundFile: episodeFile.path });
                             const unrestricted = await rd.unrestrictLink(linkToUnrestrict);
                             finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `S${seasonStr} | ${episodeStr}\n${episodeFile.path.substring(1)}`, quality: stream.quality });
                         } else {
-                            logger.warn({ requestedEpisode: episode, files: rdTorrent.files }, 'File for requested episode not found in downloaded torrent, offering re-download.');
                             finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nFile not found, click to re-process`, quality: stream.quality });
                         }
                     } else {
@@ -331,9 +334,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     return { infoHash: s.infohash, name: `[TamilMV - P2P] - ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
                 });
             }
-        } else if (requestedId.startsWith(config.addonId)) {
-            const idParts = requestedId.split(':');
-            const threadId = idParts[1];
+        } else if (idParts[1] === 'pending') {
+            const threadId = idParts[2];
             if (threadId) {
                 const thread = await models.Thread.findByPk(threadId);
                 if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
