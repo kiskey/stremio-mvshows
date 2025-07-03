@@ -68,6 +68,22 @@ const getTmdbMetadataById = async (id) => {
     return null;
 };
 
+
+const getTmdbEpisodeData = async (tmdbId, seasonNumber) => {
+    logger.debug(`Fetching episode data for TMDB ID ${tmdbId}, Season ${seasonNumber}`);
+    try {
+        const response = await tmdbApi.get(`/tv/${tmdbId}/season/${seasonNumber}`);
+        if (response.data && response.data.episodes) {
+            return response.data.episodes;
+        }
+    } catch (error) {
+        // It's okay if a season isn't found, just log it and return empty.
+        logger.warn({ err: error.message }, `Could not fetch episode data for TMDB ID ${tmdbId}, Season ${seasonNumber}`);
+    }
+    return [];
+};
+
+
 const formatTmdbData = async (tmdbResult) => {
     let imdb_id = null;
     const media_type = tmdbResult.media_type || (tmdbResult.first_air_date ? 'tv' : 'movie');
@@ -99,4 +115,4 @@ const formatTmdbData = async (tmdbResult) => {
     };
 };
 
-module.exports = { getTmdbMetadata, getTmdbMetadataById };
+module.exports = { getTmdbMetadata, getTmdbMetadataById, getTmdbEpisodeData };
