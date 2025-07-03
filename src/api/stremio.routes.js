@@ -29,7 +29,7 @@ router.get('/manifest.json', (req, res) => {
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
-            name: 'Forum TV Shows',
+            name: 'TamilMV WebSeries',
             extra: [{ "name": "skip", "isRequired": false }]
         }],
         behaviorHints: { configurable: false, adult: false }
