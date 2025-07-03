@@ -115,8 +115,18 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             return res.status(404).json({ error: 'Torrent not being processed.' });
         }
 
-        for (let i = 0; i < 36; i++) {
+        const pollTimeout = 180000; // 3 minutes total timeout
+        const pollInterval = 5000;  // 5 second polling interval
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < pollTimeout) {
             const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
+            
+            if (torrentInfo && (torrentInfo.status === 'error' || torrentInfo.status === 'magnet_error')) {
+                logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
+                break; // Exit the loop on terminal failure
+            }
+            
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 logger.info({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} finished downloading. Persisting file list.`);
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
@@ -138,13 +148,16 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     return res.redirect(302, unrestricted.download);
                 } else {
                     logger.error({ torrentInfo, episode }, 'Could not find matching file or link for downloaded torrent.');
-                    break;
+                    break; // Exit loop, file not found
                 }
             }
-            await delay(5000);
+            await delay(pollInterval);
         }
+        
+        // This part is reached if the loop times out or breaks from an error
         await rdTorrent.update({ status: 'error' });
-        res.status(404).json({ error: 'Torrent timed out on Real-Debrid.' });
+        res.status(404).json({ error: 'Torrent timed out or failed on Real-Debrid.' });
+
     } catch (error) {
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
