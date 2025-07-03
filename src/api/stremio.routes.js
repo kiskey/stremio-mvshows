@@ -79,29 +79,94 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     }
 });
 
+// --- DEFINITIVE FIX FOR METADATA ---
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
-    if (type !== 'series' || !id.startsWith(config.addonId)) {
+    if (type !== 'series') {
         return res.status(404).json({ err: 'Not Found' });
     }
+
     try {
-        const threadId = id.split(':')[1];
-        const thread = await models.Thread.findByPk(threadId);
-        if (!thread || thread.status !== 'pending_tmdb') {
-            return res.status(404).json({ err: 'Pending item not found' });
+        // --- LOGIC FOR LINKED (tt...) ITEMS ---
+        if (id.startsWith('tt')) {
+            const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: id } });
+
+            if (!metaRecord) {
+                return res.status(404).json({ err: 'Metadata not found in local database for this ID.' });
+            }
+
+            // Find all available episodes for this series to build the episode list
+            const streams = await models.Stream.findAll({
+                where: { tmdb_id: metaRecord.tmdb_id },
+                attributes: ['season', 'episode', 'episode_end'], // Only fetch what we need
+                order: [['season', 'ASC'], ['episode', 'ASC']],
+                raw: true,
+            });
+
+            const videos = [];
+            const uniqueEpisodes = new Set();
+            for (const s of streams) {
+                const episodeStart = s.episode;
+                // Handle cases where episode_end might be null for single episodes
+                const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
+
+                for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
+                    const uniqueKey = `s${s.season}e${epNum}`;
+                    if (uniqueEpisodes.has(uniqueKey)) continue;
+
+                    videos.push({
+                        season: s.season,
+                        episode: epNum,
+                        id: `${id}:${s.season}:${epNum}`,
+                        title: `Episode ${epNum}`,
+                        // Using a placeholder is fine, Stremio primarily uses the season/episode numbers
+                        released: new Date(metaRecord.year, s.season - 1, epNum).toISOString() 
+                    });
+                    uniqueEpisodes.add(uniqueKey);
+                }
+            }
+
+            const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
+
+            const metaObject = {
+                id: id,
+                type: 'series',
+                name: tmdbData.title,
+                poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
+                background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
+                description: tmdbData.overview,
+                releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
+                year: metaRecord.year,
+                videos: videos // Crucial for building the episode grid
+            };
+            return res.json({ meta: metaObject });
         }
-        const metaObject = {
-            id: id, type: 'series', name: thread.clean_title,
-            poster: thread.custom_poster || config.placeholderPoster,
-            description: thread.custom_description || 'Metadata is pending for this item. Streams may be available.',
-            releaseInfo: thread.year ? thread.year.toString() : '',
-        };
-        res.json({ meta: metaObject });
+
+        // --- LOGIC FOR PENDING (custom id) ITEMS (Unchanged) ---
+        if (id.startsWith(config.addonId)) {
+            const threadId = id.split(':')[1];
+            const thread = await models.Thread.findByPk(threadId);
+            if (!thread || thread.status !== 'pending_tmdb') {
+                return res.status(404).json({ err: 'Pending item not found' });
+            }
+            const metaObject = {
+                id: id, type: 'series', name: thread.clean_title,
+                poster: thread.custom_poster || config.placeholderPoster,
+                description: thread.custom_description || 'Metadata is pending for this item. Streams may be available.',
+                releaseInfo: thread.year ? thread.year.toString() : '',
+            };
+            return res.json({ meta: metaObject });
+        }
+        
+        // If the ID format is unrecognized
+        return res.status(404).json({ err: 'Invalid ID format' });
+
     } catch (error) {
         logger.error(error, `Failed to fetch meta for ID: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
+
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -115,18 +180,18 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             return res.status(404).json({ error: 'Torrent not being processed.' });
         }
 
-        const pollTimeout = 180000; // 3 minutes total timeout
-        const pollInterval = 5000;  // 5 second polling interval
+        const pollTimeout = 180000; // 3 minutes
+        const pollInterval = 5000;  // 5 seconds
         const startTime = Date.now();
 
         while (Date.now() - startTime < pollTimeout) {
             const torrentInfo = await rd.getTorrentInfo(rdTorrent.rd_id);
-            
+
             if (torrentInfo && (torrentInfo.status === 'error' || torrentInfo.status === 'magnet_error')) {
                 logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
                 break; // Exit the loop on terminal failure
             }
-            
+
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 logger.info({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} finished downloading. Persisting file list.`);
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
@@ -148,16 +213,13 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     return res.redirect(302, unrestricted.download);
                 } else {
                     logger.error({ torrentInfo, episode }, 'Could not find matching file or link for downloaded torrent.');
-                    break; // Exit loop, file not found
+                    break;
                 }
             }
             await delay(pollInterval);
         }
-        
-        // This part is reached if the loop times out or breaks from an error
         await rdTorrent.update({ status: 'error' });
         res.status(404).json({ error: 'Torrent timed out or failed on Real-Debrid.' });
-
     } catch (error) {
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
@@ -207,6 +269,14 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     try {
         if (requestedId.startsWith('tt')) {
             const [imdb_id, season, episode] = requestedId.split(':');
+
+            // --- DEFENSIVE FIX FOR STREAM ROUTE ---
+            // If the request is for the series root (e.g., 'tt12345'), there is no
+            // video to play. The correct response is an empty stream list. This prevents a crash.
+            if (!season || !episode) {
+                return res.json({ streams: [] });
+            }
+
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (!meta) return res.json({ streams: [] });
 
