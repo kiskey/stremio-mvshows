@@ -15,40 +15,48 @@ const generateThreadHash = (title, magnetUris) => {
 
 const createCrawler = (crawledData) => {
     return new CheerioCrawler({
-        navigationTimeoutSecs: 60,
+        navigationTimeoutSecs: config.scraperTimeoutSecs,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
 
-        // Use preNavigationHooks to transform requests for the proxy service
         preNavigationHooks: [
-            (crawlingContext, request) => {
-                // If proxies are not enabled in the config, do nothing.
+            (crawlingContext, gotOptions) => {
+                gotOptions.headers = {
+                    ...gotOptions.headers,
+                    'User-Agent': config.scraperUserAgent,
+                };
+                
+                gotOptions.timeout = { request: config.scraperTimeoutSecs * 1000 };
+
                 if (!config.isProxyEnabled) {
                     return;
                 }
                 
-                // 1. Store the original target URL.
-                const originalUrl = request.url;
-                
-                // 2. Select the next proxy service endpoint, rotating through the list.
+                const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
-                proxyIndex++; // Increment for the next request.
+                proxyIndex++;
 
                 logger.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
 
-                // 3. Overwrite the request object to be a POST request to the proxy.
-                request.url = proxyUrl; // The URL we actually visit is the proxy service.
-                request.method = 'POST';
-                request.payload = JSON.stringify({ pageURL: originalUrl }); // The body of the POST request.
-                request.headers = {
-                    ...request.headers,
-                    'Content-Type': 'application/json',
-                };
+                gotOptions.url = proxyUrl;
+                gotOptions.method = 'POST';
+                gotOptions.json = { pageURL: originalUrl };
             }
         ],
 
         async requestHandler(context) {
-            const { request, log } = context;
+            const { request, log, $ } = context;
+
+            // FINAL IMPROVEMENT: Gracefully handle non-HTML responses
+            if (!$ || typeof $.html !== 'function') {
+                log.error(`Request for ${request.url} did not return valid HTML. It might be a block page, a JSON error, or an empty response.`, {
+                    // Log the content type to help diagnose the issue
+                    contentType: context.response?.headers['content-type'],
+                });
+                // Abort processing for this specific request to avoid further errors.
+                return;
+            }
+            
             const { label } = request;
 
             switch (label) {
@@ -62,10 +70,15 @@ const createCrawler = (crawledData) => {
                     log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
-        failedRequestHandler({ request, log }) {
+
+        failedRequestHandler({ request, log, error }) {
             log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url,
-                retryCount: request.retryCount
+                retryCount: request.retryCount,
+                error: error.message,
+                statusCode: error.response?.statusCode,
+                responseHeaders: error.response?.headers,
+                responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
         }
     });
@@ -84,7 +97,6 @@ async function handleListPage({ $, log, crawler }) {
     });
     if (newRequests.length > 0) {
         log.info(`Enqueuing ${newRequests.length} detail pages from list page.`);
-        // The preNavigationHook will automatically handle these new requests as well.
         await crawler.addRequests(newRequests);
     }
 }
@@ -109,10 +121,8 @@ const runCrawler = async () => {
     const startRequests = [];
     const baseUrl = config.forumUrl.replace(/\/$/, '');
 
-    // The loop becomes simple again. The hook handles all proxy logic.
     for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
         let url = i === 1 ? baseUrl : `${baseUrl}/page/${i}`;
-        // We queue the *original* target URL. The hook will transform it if needed.
         startRequests.push({ url, label: 'LIST' });
     }
 
