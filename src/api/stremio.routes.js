@@ -26,7 +26,7 @@ router.get('/manifest.json', (req, res) => {
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'],
         types: ['series'],
-        idPrefixes: [config.addonId], 
+        idPrefixes: [config.addonId, 'tt'], 
         catalogs: [{
             type: 'series',
             id: 'top-series-from-forum',
@@ -236,7 +236,7 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
 });
 
 router.get('/stream/:type/:id.json', async (req, res) => {
-    if (req.params.type !== 'series' || !req.params.id.startsWith(config.addonId)) {
+    if (req.params.type !== 'series') {
         return res.status(404).json({ streams: [] });
     }
     
@@ -244,47 +244,44 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     let finalStreams = [];
 
     try {
-        const idParts = requestedId.split(':');
-        const itemTypeOrImdbId = idParts[1];
+        let imdb_id, season, episode;
 
-        // --- NEW LOGIC: Correctly route based on ID type ---
-        
-        // Case 1: The ID is for a pending item
-        if (itemTypeOrImdbId === 'pending') {
-            const threadId = idParts[2];
-            if (threadId) {
-                const thread = await models.Thread.findByPk(threadId);
-                if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
-                    for (const magnet_uri of thread.magnet_uris) {
-                        const parsed = parser.parseMagnet(magnet_uri);
-                        if (!parsed) continue;
-                        const seasonStr = String(parsed.season).padStart(2, '0');
-                        let episodeStr;
-                        if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
-                        else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
-                        else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
-                        
-                        finalStreams.push({
-                            infoHash: parsed.infohash,
-                            name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`,
-                            title: `S${seasonStr} | ${episodeStr}\n${parsed.quality || 'SD'}`,
-                            quality: parsed.quality
-                        });
+        if (requestedId.startsWith(config.addonId)) {
+            const idParts = requestedId.split(':');
+            const itemTypeOrImdbId = idParts[1];
+
+            if (itemTypeOrImdbId === 'pending') {
+                const threadId = idParts[2];
+                if (threadId) {
+                    const thread = await models.Thread.findByPk(threadId);
+                    if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
+                        for (const magnet_uri of thread.magnet_uris) {
+                            const parsed = parser.parseMagnet(magnet_uri);
+                            if (!parsed) continue;
+                            let episodeStr;
+                            if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
+                            else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
+                            else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
+                            
+                            finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `S${String(parsed.season).padStart(2, '0')} | ${episodeStr}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
+                        }
                     }
                 }
+            } else if (itemTypeOrImdbId.startsWith('tt')) {
+                if (idParts.length < 4) return res.json({ streams: [] });
+                imdb_id = itemTypeOrImdbId;
+                season = idParts[2];
+                episode = idParts[3];
             }
+        } else if (requestedId.startsWith('tt')) {
+            const idParts = requestedId.split(':');
+            if (idParts.length < 3) return res.json({ streams: [] });
+            imdb_id = idParts[0];
+            season = idParts[1];
+            episode = idParts[2];
         }
-        // Case 2: The ID is for a linked item
-        else if (itemTypeOrImdbId.startsWith('tt')) {
-            // Defensive check: if it's a linked item but doesn't have season/episode, return empty.
-            if (idParts.length < 4) {
-                return res.json({ streams: [] });
-            }
 
-            const imdb_id = itemTypeOrImdbId;
-            const season = idParts[2];
-            const episode = idParts[3];
-
+        if (imdb_id && season && episode) {
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (!meta) return res.json({ streams: [] });
 
@@ -293,15 +290,13 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             });
 
             if (rd.isEnabled) {
-                for (const stream of dbStreams) {
+                 for (const stream of dbStreams) {
                     const seasonStr = String(stream.season).padStart(2, '0');
                     let episodeStr;
                     if (!stream.episode_end || stream.episode_end === stream.episode) episodeStr = `Episode ${String(stream.episode).padStart(2, '0')}`;
                     else if (stream.episode === 1 && stream.episode_end === 999) episodeStr = 'Season Pack';
                     else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
-                    
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
-
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
                         let episodeFileIndex = -1;
                         const episodeFile = rdTorrent.files.find((file, index) => {
@@ -327,7 +322,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     if (!s.episode_end || s.episode_end === s.episode) episodeStr = `Episode ${String(s.episode).padStart(2, '0')}`;
                     else if (s.episode === 1 && s.episode_end === 999) episodeStr = 'Season Pack';
                     else episodeStr = `Episodes ${String(s.episode).padStart(2, '0')}-${String(s.episode_end).padStart(2, '0')}`;
-                    
                     return { infoHash: s.infohash, name: `[TamilMV - P2P] - ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
                 });
             }
@@ -338,8 +332,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         finalStreams.sort(sortStreamsByQuality);
 
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
-            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
-        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infohash}`, ...getTrackers() ] }));
+            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || s.infoHash))
+        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
 
