@@ -33,19 +33,67 @@ function expandEpisodeRange(rangeStr) {
 }
 
 /**
- * Parses a thread title using PTT after cleaning it.
+ * Parses a thread title using a multi-step process to be more resilient.
+ * It first attempts to use PTT. If that fails, it uses a heuristic fallback.
  * @param {string} rawTitle The raw title from the forum.
  * @returns {object|null} An object with { clean_title, year } or null.
  */
 function parseTitle(rawTitle) {
+    // --- PRIMARY METHOD (Unchanged) ---
+    // First, attempt to parse using the original, proven PTT method.
     const cleanedForPtt = rawTitle.replace(/By\s[\w\s.-]+,.*$/i, '').trim();
     const pttResult = ptt.parse(cleanedForPtt);
 
     if (pttResult.title && pttResult.year) {
+        // Success! The original flow worked. Return immediately.
         return { clean_title: pttResult.title, year: pttResult.year };
     }
+
+    // --- FALLBACK METHOD (New "Second Chance" Logic) ---
+    // This block only runs if the primary method above failed.
+    logger.warn(`PTT failed to find both title and year for "${rawTitle}". Attempting heuristic fallback.`);
     
-    logger.error(`PTT parsing failed for title: "${rawTitle}"`);
+    let cleanTitle = cleanedForPtt;
+    
+    // 1. Try to extract a year from the original string, as it's the most reliable format.
+    const yearMatch = cleanTitle.match(/[\[\(](\d{4})[\]\)]/);
+    const year = yearMatch ? parseInt(yearMatch[1], 10) : null;
+
+    // 2. Define known metadata "noise" to be removed using heuristics.
+    const noisePatterns = [
+        /\[.*?\]/g,                                  // Remove all content in square brackets
+        /\(.*?Complete Series.*?\)/gi,              // Remove (Complete Series)
+        /\b(1080p|720p|480p|2160p|4K|HD|HQ)\b/gi,     // Qualities
+        /\b(WEB-DL|HDRip|BluRay|WEBrip|HDTV|UNTOUCHED)\b/gi,   // Sources
+        /\b(x264|x265|HEVC|AVC)\b/gi,                // Codecs
+        /\b(AAC|DDP5\.1|ATMOS|AC3)\b/gi,             // Audio
+        /\b(\d+(\.\d+)?(GB|MB))\b/gi,                // File sizes
+        /\b(Esub|MSubs|Multi-Subs)\b/gi,             // Subtitles
+        /\b(Tam|Tel|Hin|Eng|Tamil|Telugu|Hindi|English|Kannada|Malayalam|Mal)\b/gi, // Languages
+        /\b(Part|Vol)\s?\d+/gi,                      // Part/Volume
+        /S\d{1,2}(\s?E\d{1,3})?(\s?-\s?E\d{1,3})?/gi,  // S01, S01E01, S01-E10 patterns
+        /\(\s?E\d{1,2}\s?-\s?\d{1,2}\s?\)/gi,          // (E06-10) pattern
+        /EP\s?\(?\d+-\d+\)?/gi,                       // EP (01-15) patterns
+        /[-–_.]/g                                    // Replace common separators with spaces
+    ];
+
+    // 3. Systematically remove the noise from the title.
+    for (const pattern of noisePatterns) {
+        cleanTitle = cleanTitle.replace(pattern, ' ');
+    }
+    
+    // 4. Clean up the resulting string.
+    // Remove extra whitespace and any leftover standalone characters.
+    const finalTitle = cleanTitle.trim().replace(/\s+/g, ' ');
+
+    // 5. If we are left with a plausible title, return it.
+    if (finalTitle) {
+        logger.info(`Heuristic fallback succeeded for "${rawTitle}". Parsed Title: "${finalTitle}", Year: ${year}`);
+        return { clean_title: finalTitle, year: year };
+    }
+    
+    // If both methods have failed, we log the critical failure.
+    logger.error(`Critical parsing failure for title: "${rawTitle}". Both PTT and fallback failed.`);
     return null;
 }
 
@@ -56,7 +104,7 @@ function parseTitle(rawTitle) {
  */
 function parseMagnet(magnetUri) {
     try {
-        const infohash = getInfohash(magnetUri); // Use the new helper
+        const infohash = getInfohash(magnetUri);
         const params = new URLSearchParams(magnetUri.split('?')[1]);
         let filename = params.get('dn') || '';
         if (!infohash || !filename) return null;
@@ -115,5 +163,5 @@ function getInfohash(magnetUri) {
 module.exports = { 
     parseTitle, 
     parseMagnet,
-    getInfohash // FIX: Export the new function
+    getInfohash
 };
