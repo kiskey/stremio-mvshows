@@ -49,38 +49,50 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     }
     const limit = 100;
     try {
-        const linkedMetasPromise = models.TmdbMetadata.findAll({
-            where: { imdb_id: { [Op.ne]: null, [Op.startsWith]: 'tt' } },
-            order: [['year', 'DESC NULLS LAST'], ['updatedAt', 'DESC']],
-            raw: true
-        });
-        const pendingThreadsPromise = models.Thread.findAll({
-            where: { status: 'pending_tmdb' },
-            order: [['updatedAt', 'DESC']],
-        });
-        const [linkedMetasRaw, pendingThreads] = await Promise.all([linkedMetasPromise, pendingThreadsPromise]);
-        
-        const linkedMetas = linkedMetasRaw.map(meta => {
-            const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
-            return {
-                id: `${config.addonId}:${meta.imdb_id}`, 
-                type: 'series',
-                name: parsedData.title,
-                poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
-            };
+        // --- REWRITTEN CATALOG LOGIC FOR CORRECT SORTING AND EFFICIENCY ---
+        const allThreads = await models.Thread.findAll({
+            // Use include to JOIN the TmdbMetadata table, making sorting by year possible
+            include: [{
+                model: models.TmdbMetadata,
+                required: false // Use a LEFT JOIN to ensure we get both linked and pending threads
+            }],
+            // Apply sorting directly in the database for efficiency
+            order: [
+                ['updatedAt', 'DESC'], // Primary sort: Most recently updated thread first
+                [models.TmdbMetadata, 'year', 'DESC'] // Secondary sort: Newer year first
+            ],
+            offset: skip,
+            limit: limit
         });
 
-        const pendingMetas = pendingThreads.map(thread => ({
-            id: `${config.addonId}:pending:${thread.id}`, 
-            type: 'series',
-            name: `[PENDING] ${thread.clean_title}`,
-            poster: thread.custom_poster || config.placeholderPoster,
-            description: thread.custom_description || `This item is pending an official metadata match.`
-        }));
+        // Map the single, sorted result set into the Stremio meta format
+        const metas = allThreads.map(thread => {
+            // Case 1: The thread is linked to metadata
+            if (thread.status === 'linked' && thread.TmdbMetadatum) {
+                const meta = thread.TmdbMetadatum;
+                const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
+                return {
+                    id: `${config.addonId}:${meta.imdb_id}`,
+                    type: 'series',
+                    name: parsedData.title,
+                    poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
+                };
+            }
+            // Case 2: The thread is pending
+            else if (thread.status === 'pending_tmdb') {
+                 return {
+                    id: `${config.addonId}:pending:${thread.id}`, 
+                    type: 'series',
+                    name: `[PENDING] ${thread.clean_title}`,
+                    poster: thread.custom_poster || config.placeholderPoster,
+                    description: thread.custom_description || `This item is pending an official metadata match.`
+                };
+            }
+            return null;
+        }).filter(meta => meta); // Filter out any potential nulls from malformed data
 
-        const allMetas = [...linkedMetas, ...pendingMetas];
-        const paginatedMetas = allMetas.slice(skip, skip + limit);
-        res.json({ metas: paginatedMetas });
+        res.json({ metas: metas });
+
     } catch (error) {
         logger.error(error, "Failed to fetch catalog data.");
         res.status(500).json({ err: 'Internal Server Error' });
@@ -332,7 +344,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         finalStreams.sort(sortStreamsByQuality);
 
         const uniqueStreams = finalStreams.filter((stream, index, self) => 
-            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || s.infoHash))
+            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
         ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
 
         res.json({ streams: uniqueStreams });
