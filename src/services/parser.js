@@ -2,7 +2,7 @@
 const ptt = require('parse-torrent-title');
 const logger = require('../utils/logger');
 
-// Regex patterns inspired by the provided example for maximum accuracy.
+// Regex patterns for magnet link parsing (unchanged)
 const PARSING_PATTERNS = [
     { regex: /S(\d{1,2})\s?EP?\s?\((\d{1,3})[-‑](\d{1,3})\)/i, type: 'EPISODE_PACK' },
     { regex: /S(\d{1,2})\s?E(\d{1,3})[-‑]E?(\d{1,3})/i, type: 'EPISODE_PACK' },
@@ -11,19 +11,13 @@ const PARSING_PATTERNS = [
     { regex: /(?:S(eason)?\s*)(\d{1,2})(?!\s?E|\s?\d)|(Complete\sSeason|Season\s\d{1,2})/i, type: 'SEASON_PACK' }
 ];
 
-/**
- * Expands a numeric range from a string, handling multiple formats.
- * @param {string} rangeStr The string containing the range.
- * @returns {number[]} An array of numbers.
- */
+// expandEpisodeRange function (unchanged)
 function expandEpisodeRange(rangeStr) {
     const match = rangeStr.match(/(\d{1,3})[–-]\s*(\d{1,3})/);
     if (!match) return [];
-    
     const start = parseInt(match[1], 10);
     const end = parseInt(match[2], 10);
     const episodes = [];
-
     if (!isNaN(start) && !isNaN(end) && end >= start) {
         for (let i = start; i <= end; i++) {
             episodes.push(i);
@@ -34,74 +28,71 @@ function expandEpisodeRange(rangeStr) {
 
 /**
  * Parses a thread title using a multi-step process to be more resilient.
- * It first attempts to use PTT. If that fails, it uses a heuristic fallback.
+ * It first attempts to use PTT. If that fails, it uses a multi-pass heuristic fallback.
  * @param {string} rawTitle The raw title from the forum.
  * @returns {object|null} An object with { clean_title, year } or null.
  */
 function parseTitle(rawTitle) {
     // --- PRIMARY METHOD (Unchanged) ---
-    // First, attempt to parse using the original, proven PTT method.
     const cleanedForPtt = rawTitle.replace(/By\s[\w\s.-]+,.*$/i, '').trim();
     const pttResult = ptt.parse(cleanedForPtt);
 
     if (pttResult.title && pttResult.year) {
-        // Success! The original flow worked. Return immediately.
         return { clean_title: pttResult.title, year: pttResult.year };
     }
 
-    // --- FALLBACK METHOD (New "Second Chance" Logic) ---
-    // This block only runs if the primary method above failed.
+    // --- FALLBACK METHOD (Enhanced with Multi-Pass Heuristics) ---
     logger.warn(`PTT failed to find both title and year for "${rawTitle}". Attempting heuristic fallback.`);
     
     let cleanTitle = cleanedForPtt;
     
-    // 1. Try to extract a year from the original string, as it's the most reliable format.
+    // 1. Extract year first from the original string, as it's the most reliable format.
     const yearMatch = cleanTitle.match(/[\[\(](\d{4})[\]\)]/);
     const year = yearMatch ? parseInt(yearMatch[1], 10) : null;
+    if (yearMatch) {
+        cleanTitle = cleanTitle.replace(yearMatch[0], ' '); // Remove the year for cleaner parsing
+    }
 
-    // 2. Define known metadata "noise" to be removed using heuristics.
+    // 2. First Pass: Remove large chunks of known metadata patterns.
     const noisePatterns = [
         /\[.*?\]/g,                                  // Remove all content in square brackets
         /\(.*?Complete Series.*?\)/gi,              // Remove (Complete Series)
         /\b(1080p|720p|480p|2160p|4K|HD|HQ)\b/gi,     // Qualities
-        /\b(WEB-DL|HDRip|BluRay|WEBrip|HDTV|UNTOUCHED)\b/gi,   // Sources
+        /\b(WEB-DL|HDRip|BluRay|WEBrip|HDTV|UNTOUCHED|TRUE)\b/gi, // Sources
         /\b(x264|x265|HEVC|AVC)\b/gi,                // Codecs
         /\b(AAC|DDP5\.1|ATMOS|AC3)\b/gi,             // Audio
         /\b(\d+(\.\d+)?(GB|MB))\b/gi,                // File sizes
         /\b(Esub|MSubs|Multi-Subs)\b/gi,             // Subtitles
         /\b(Tam|Tel|Hin|Eng|Tamil|Telugu|Hindi|English|Kannada|Malayalam|Mal)\b/gi, // Languages
-        /\b(Part|Vol)\s?\d+/gi,                      // Part/Volume
+        /\b(Part|Vol|DAY)\s?\(?\d+.*\)?/gi,          // Part/Volume/Day indicators
         /S\d{1,2}(\s?E\d{1,3})?(\s?-\s?E\d{1,3})?/gi,  // S01, S01E01, S01-E10 patterns
         /\(\s?E\d{1,2}\s?-\s?\d{1,2}\s?\)/gi,          // (E06-10) pattern
-        /EP\s?\(?\d+-\d+\)?/gi,                       // EP (01-15) patterns
-        /[-–_.]/g                                    // Replace common separators with spaces
+        /EP\s?\(?\d+-\d+\)?/gi                       // EP (01-15) patterns
     ];
 
-    // 3. Systematically remove the noise from the title.
     for (const pattern of noisePatterns) {
         cleanTitle = cleanTitle.replace(pattern, ' ');
     }
     
-    // 4. Clean up the resulting string.
-    // Remove extra whitespace and any leftover standalone characters.
-    const finalTitle = cleanTitle.trim().replace(/\s+/g, ' ');
+    // 3. Second Pass (Polishing): Clean up leftover symbols, dots, and whitespace.
+    // This pass is crucial for removing the junk you identified.
+    cleanTitle = cleanTitle
+        .replace(/[-–_.]/g, ' ')       // Replace common separators with spaces
+        .replace(/[\[\](){}&:,]/g, ' ') // Remove standalone brackets, parens, and symbols
+        .replace(/\s+/g, ' ')          // Collapse multiple spaces into a single space
+        .trim();                       // Trim leading/trailing whitespace
 
-    // 5. If we are left with a plausible title, return it.
-    if (finalTitle) {
+    // 4. Final check for a plausible title.
+    if (cleanTitle) {
         logger.info(`Heuristic fallback succeeded for "${rawTitle}". Parsed Title: "${finalTitle}", Year: ${year}`);
-        return { clean_title: finalTitle, year: year };
+        return { clean_title: cleanTitle, year: year };
     }
     
-    // If both methods have failed, we log the critical failure.
     logger.error(`Critical parsing failure for title: "${rawTitle}". Both PTT and fallback failed.`);
     return null;
 }
 
-/**
- * Parses a magnet URI's 'dn' parameter to extract stream metadata.
- * @param {string} magnetUri The full magnet URI.
- * @returns {object|null} An object with stream metadata and a 'type' field.
- */
+// parseMagnet function (unchanged)
 function parseMagnet(magnetUri) {
     try {
         const infohash = getInfohash(magnetUri);
@@ -149,11 +140,7 @@ function parseMagnet(magnetUri) {
     }
 }
 
-/**
- * Extracts the infohash from a magnet URI.
- * @param {string} magnetUri The full magnet URI.
- * @returns {string|null} The infohash or null if not found.
- */
+// getInfohash function (unchanged)
 function getInfohash(magnetUri) {
     if (!magnetUri) return null;
     const match = magnetUri.match(/btih:([a-fA-F0-9]{40})/);
