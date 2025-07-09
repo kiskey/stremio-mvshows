@@ -68,7 +68,7 @@ const createCrawler = (crawledData) => {
             }
         },
 
-        failedRequestHandler({ request, log, error }) {
+        failedRequestHandler({ request, log}, error ) {
             log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url,
                 retryCount: request.retryCount,
