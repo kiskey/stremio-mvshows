@@ -47,13 +47,10 @@ const createCrawler = (crawledData) => {
         async requestHandler(context) {
             const { request, log, $ } = context;
 
-            // FINAL IMPROVEMENT: Gracefully handle non-HTML responses
             if (!$ || typeof $.html !== 'function') {
                 log.error(`Request for ${request.url} did not return valid HTML. It might be a block page, a JSON error, or an empty response.`, {
-                    // Log the content type to help diagnose the issue
                     contentType: context.response?.headers['content-type'],
                 });
-                // Abort processing for this specific request to avoid further errors.
                 return;
             }
             
@@ -119,17 +116,28 @@ const runCrawler = async () => {
     const crawledData = [];
     const crawler = createCrawler(crawledData);
     const startRequests = [];
-    const baseUrl = config.forumUrl.replace(/\/$/, '');
+    
+    // --- NEW LOGIC: Iterate over all configured forum URLs ---
+    config.forumUrls.forEach(baseUrl => {
+        const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+        
+        // This existing loop now runs for each forum in the list
+        for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
+            let url = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
+            startRequests.push({ url, label: 'LIST' });
+        }
+    });
+    // --- END NEW LOGIC ---
 
-    for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
-        let url = i === 1 ? baseUrl : `${baseUrl}/page/${i}`;
-        startRequests.push({ url, label: 'LIST' });
-    }
+    const logInfo = {
+        totalRequests: startRequests.length,
+        forumCount: config.forumUrls.length
+    };
 
     if (config.isProxyEnabled) {
-        logger.info({ count: config.proxyUrls.length }, `Starting crawl of ${startRequests.length} pages using proxies.`);
+        logger.info({ ...logInfo, proxyCount: config.proxyUrls.length }, `Starting crawl using proxies.`);
     } else {
-        logger.info(`Starting direct crawl of ${startRequests.length} pages.`);
+        logger.info(logInfo, `Starting direct crawl.`);
     }
     
     await crawler.run(startRequests);
