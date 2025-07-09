@@ -58,8 +58,8 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
             }],
             // Apply sorting directly in the database for efficiency
             order: [
-                ['updatedAt', 'DESC'], // Primary sort: Most recently updated thread first
-                [models.TmdbMetadata, 'year', 'DESC'] // Secondary sort: Newer year first
+                [models.TmdbMetadata, 'year', 'DESC'], // Primary sort: Newer year first
+                ['updatedAt', 'DESC']                 // Secondary sort: Most recently updated thread first
             ],
             offset: skip,
             limit: limit
