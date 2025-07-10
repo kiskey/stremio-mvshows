@@ -3,6 +3,14 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 
+// A custom error class to identify when a resource is expired on RD
+class ResourceNotFoundError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ResourceNotFoundError';
+    }
+}
+
 if (!config.isRdEnabled) {
     logger.info('Real-Debrid service is disabled: No API key provided.');
     module.exports = { isEnabled: false };
@@ -28,6 +36,11 @@ if (!config.isRdEnabled) {
             const response = await rdApi.get(`/torrents/info/${id}`);
             return response.data;
         } catch (error) {
+            // Also handle resource not found here for polling safety
+            if (error.response && error.response.status === 404) {
+                 logger.warn({ rd_id: id }, "getTorrentInfo received a 404. The torrent has likely expired or was invalid.");
+                 throw new ResourceNotFoundError(`Torrent ID ${id} not found on Real-Debrid.`);
+            }
             logger.error({ err: error.response ? error.response.data : error.message }, `Failed to get torrent info for ID: ${id}`);
             throw error;
         }
@@ -38,6 +51,13 @@ if (!config.isRdEnabled) {
             await rdApi.post(`/torrents/selectFiles/${id}`, `files=${fileIds}`);
             return true;
         } catch (error) {
+            // Check for the specific "unknown_ressource" error from RD.
+            if (error.response && error.response.status === 404 && error.response.data?.error_code === 7) {
+                logger.warn({ rd_id: id }, "Real-Debrid reported 'unknown_ressource'. The torrent has likely expired or was invalid.");
+                // Throw our custom error so the calling function can handle it gracefully.
+                throw new ResourceNotFoundError(`Torrent ID ${id} not found on Real-Debrid.`);
+            }
+
             if (error.response && error.response.status === 202) {
                 logger.warn(`Files for torrent ID ${id} were already selected.`);
                 return true;
@@ -51,7 +71,8 @@ if (!config.isRdEnabled) {
         try {
             const response = await rdApi.post('/unrestrict/link', `link=${link}`);
             return response.data;
-        } catch (error) {
+        } catch (error)
+        {
             logger.error({ err: error.response ? error.response.data : error.message }, `Failed to unrestrict link: ${link}`);
             throw error;
         }
@@ -78,6 +99,7 @@ if (!config.isRdEnabled) {
         getTorrentInfo,
         selectFiles,
         unrestrictLink,
-        addAndSelect
+        addAndSelect,
+        ResourceNotFoundError // Export the custom error
     };
 }
