@@ -193,6 +193,15 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                 logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
                 break;
             }
+
+            // --- START OF SELF-HEALING FIX ---
+            if (torrentInfo && torrentInfo.status === 'waiting_files_selection') {
+                logger.warn({ rd_id: torrentInfo.id }, "Torrent is waiting for file selection. Attempting to select all files to un-stick it.");
+                await rd.selectFiles(torrentInfo.id);
+                // Continue the loop to check the status again after a delay.
+            }
+            // --- END OF SELF-HEALING FIX ---
+
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
                 let episodeFileIndex = -1;
@@ -224,22 +233,15 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     if (!rd.isEnabled) return res.status(404).send('Not Found');
     try {
         const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
-        // --- START OF BUG FIX ---
-        // This block now contains the self-healing logic.
         if (existingRdTorrent) {
             logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found in local DB. Checking status.");
-            // If a torrent is stuck in the 'adding' or 'error' state,
-            // we re-trigger the file selection just in case it failed the first time.
             if (existingRdTorrent.status === 'adding' || existingRdTorrent.status === 'error') {
                 logger.warn({ rd_id: existingRdTorrent.rd_id }, "Torrent is in a potentially stuck state. Attempting to re-select files to un-stick it.");
                 await rd.selectFiles(existingRdTorrent.rd_id);
             }
-            // Now that we've attempted to un-stick it, we can safely redirect to polling.
             return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
         }
-        // --- END OF BUG FIX ---
 
-        // This is the original logic for adding a completely new torrent.
         const rdResponse = await rd.addMagnet(`magnet:?xt=urn:btih:${infohash}`);
         if (rdResponse && rdResponse.id) {
             await models.RdTorrent.create({ infohash, rd_id: rdResponse.id, status: 'adding' });
