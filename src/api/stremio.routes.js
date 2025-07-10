@@ -49,25 +49,20 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     }
     const limit = 100;
     try {
-        // --- REWRITTEN CATALOG LOGIC FOR CORRECT SORTING AND EFFICIENCY ---
         const allThreads = await models.Thread.findAll({
-            // Use include to JOIN the TmdbMetadata table, making sorting by year possible
             include: [{
                 model: models.TmdbMetadata,
-                required: false // Use a LEFT JOIN to ensure we get both linked and pending threads
+                required: false 
             }],
-            // Apply sorting directly in the database for efficiency
             order: [
-                [models.TmdbMetadata, 'year', 'DESC'], // Primary sort: Newer year first
-                ['updatedAt', 'DESC']                 // Secondary sort: Most recently updated thread first
+                [models.TmdbMetadata, 'year', 'DESC'], 
+                ['updatedAt', 'DESC']                 
             ],
             offset: skip,
             limit: limit
         });
 
-        // Map the single, sorted result set into the Stremio meta format
         const metas = allThreads.map(thread => {
-            // Case 1: The thread is linked to metadata
             if (thread.status === 'linked' && thread.TmdbMetadatum) {
                 const meta = thread.TmdbMetadatum;
                 const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
@@ -78,7 +73,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                     poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
                 };
             }
-            // Case 2: The thread is pending
             else if (thread.status === 'pending_tmdb') {
                  return {
                     id: `${config.addonId}:pending:${thread.id}`, 
@@ -89,7 +83,7 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                 };
             }
             return null;
-        }).filter(meta => meta); // Filter out any potential nulls from malformed data
+        }).filter(meta => meta);
 
         res.json({ metas: metas });
 
@@ -230,9 +224,22 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     if (!rd.isEnabled) return res.status(404).send('Not Found');
     try {
         const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
+        // --- START OF BUG FIX ---
+        // This block now contains the self-healing logic.
         if (existingRdTorrent) {
+            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found in local DB. Checking status.");
+            // If a torrent is stuck in the 'adding' or 'error' state,
+            // we re-trigger the file selection just in case it failed the first time.
+            if (existingRdTorrent.status === 'adding' || existingRdTorrent.status === 'error') {
+                logger.warn({ rd_id: existingRdTorrent.rd_id }, "Torrent is in a potentially stuck state. Attempting to re-select files to un-stick it.");
+                await rd.selectFiles(existingRdTorrent.rd_id);
+            }
+            // Now that we've attempted to un-stick it, we can safely redirect to polling.
             return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
         }
+        // --- END OF BUG FIX ---
+
+        // This is the original logic for adding a completely new torrent.
         const rdResponse = await rd.addMagnet(`magnet:?xt=urn:btih:${infohash}`);
         if (rdResponse && rdResponse.id) {
             await models.RdTorrent.create({ infohash, rd_id: rdResponse.id, status: 'adding' });
