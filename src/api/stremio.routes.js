@@ -193,15 +193,6 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                 logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
                 break;
             }
-
-            // --- START OF SELF-HEALING FIX ---
-            if (torrentInfo && torrentInfo.status === 'waiting_files_selection') {
-                logger.warn({ rd_id: torrentInfo.id }, "Torrent is waiting for file selection. Attempting to select all files to un-stick it.");
-                await rd.selectFiles(torrentInfo.id);
-                // Continue the loop to check the status again after a delay.
-            }
-            // --- END OF SELF-HEALING FIX ---
-
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
                 let episodeFileIndex = -1;
@@ -226,6 +217,13 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
     }
+});
+
+// --- NEW HEAD HANDLER TO PREVENT CRASHES ---
+// This handles Stremio's pre-flight check gracefully.
+router.head('/rd-add/:infohash/:episode.json', (req, res) => {
+    // Acknowledge the request and end it immediately without a body.
+    res.status(200).end();
 });
 
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
