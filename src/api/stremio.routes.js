@@ -193,6 +193,10 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                 logger.warn({ torrentInfo }, `RD torrent ${rdTorrent.rd_id} entered a failed state.`);
                 break;
             }
+            if (torrentInfo && torrentInfo.status === 'waiting_files_selection') {
+                logger.warn({ rd_id: torrentInfo.id }, "Torrent is waiting for file selection. Attempting to select all files to un-stick it.");
+                await rd.selectFiles(torrentInfo.id);
+            }
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
                 let episodeFileIndex = -1;
@@ -214,43 +218,62 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
         await rdTorrent.update({ status: 'error' });
         res.status(404).json({ error: 'Torrent timed out or failed.' });
     } catch (error) {
+        if (error instanceof rd.ResourceNotFoundError) {
+            logger.warn({ infohash }, "Torrent disappeared from Real-Debrid during polling. Marking as failed.");
+            await models.RdTorrent.update({ status: 'error' }, { where: { infohash } });
+        }
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
     }
 });
 
-// --- NEW HEAD HANDLER TO PREVENT CRASHES ---
-// This handles Stremio's pre-flight check gracefully.
 router.head('/rd-add/:infohash/:episode.json', (req, res) => {
-    // Acknowledge the request and end it immediately without a body.
     res.status(200).end();
 });
 
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     const { infohash, episode } = req.params;
     if (!rd.isEnabled) return res.status(404).send('Not Found');
+
+    const addAndProcess = async () => {
+        const magnet = `magnet:?xt=urn:btih:${infohash}`;
+        const rdResponse = await rd.addMagnet(magnet);
+        if (rdResponse && rdResponse.id) {
+            await models.RdTorrent.create({
+                infohash: infohash,
+                rd_id: rdResponse.id,
+                status: 'adding'
+            });
+            await rd.selectFiles(rdResponse.id);
+            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
+        } else {
+            throw new Error('Could not add torrent to Real-Debrid after re-attempt.');
+        }
+    };
+
     try {
         const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
+
         if (existingRdTorrent) {
-            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found in local DB. Checking status.");
-            if (existingRdTorrent.status === 'adding' || existingRdTorrent.status === 'error') {
-                logger.warn({ rd_id: existingRdTorrent.rd_id }, "Torrent is in a potentially stuck state. Attempting to re-select files to un-stick it.");
+            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found. Attempting to select files.");
+            try {
                 await rd.selectFiles(existingRdTorrent.rd_id);
+                return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
+            } catch (error) {
+                if (error instanceof rd.ResourceNotFoundError) {
+                    logger.warn({ infohash, rd_id: existingRdTorrent.rd_id }, "Stale torrent found in DB. Deleting and re-adding.");
+                    await existingRdTorrent.destroy();
+                    return await addAndProcess();
+                }
+                throw error;
             }
-            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
         }
 
-        const rdResponse = await rd.addMagnet(`magnet:?xt=urn:btih:${infohash}`);
-        if (rdResponse && rdResponse.id) {
-            await models.RdTorrent.create({ infohash, rd_id: rdResponse.id, status: 'adding' });
-            await rd.selectFiles(rdResponse.id);
-            res.redirect(`/rd-poll/${infohash}/${episode}.json`);
-        } else {
-            res.status(503).json({ error: 'Could not add torrent to Real-Debrid.' });
-        }
+        await addAndProcess();
+        
     } catch (error) {
-        logger.error(error, `Failed to add infohash ${infohash} to RD.`);
-        res.status(500).json({ error: 'Could not add torrent.' });
+        logger.error(error, `Critical failure during add process for infohash ${infohash}.`);
+        res.status(500).json({ error: 'Could not process torrent on Real-Debrid.' });
     }
 });
 
