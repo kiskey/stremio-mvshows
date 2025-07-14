@@ -234,46 +234,53 @@ router.head('/rd-add/:infohash/:episode.json', (req, res) => {
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     const { infohash, episode } = req.params;
     if (!rd.isEnabled) return res.status(404).send('Not Found');
-
-    const addAndProcess = async () => {
-        const magnet = `magnet:?xt=urn:btih:${infohash}`;
-        const rdResponse = await rd.addMagnet(magnet);
-        if (rdResponse && rdResponse.id) {
-            await models.RdTorrent.create({
-                infohash: infohash,
-                rd_id: rdResponse.id,
-                status: 'adding'
-            });
-            await rd.selectFiles(rdResponse.id);
-            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
-        } else {
-            throw new Error('Could not add torrent to Real-Debrid after re-attempt.');
-        }
-    };
-
     try {
         const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
 
         if (existingRdTorrent) {
-            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found. Attempting to select files.");
-            try {
-                await rd.selectFiles(existingRdTorrent.rd_id);
-                return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
-            } catch (error) {
-                if (error instanceof rd.ResourceNotFoundError) {
-                    logger.warn({ infohash, rd_id: existingRdTorrent.rd_id }, "Stale torrent found in DB. Deleting and re-adding.");
-                    await existingRdTorrent.destroy();
-                    return await addAndProcess();
-                }
-                throw error;
-            }
+            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found in local DB. Redirecting to poll.");
+            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
         }
 
-        await addAndProcess();
-        
+        const rdResponse = await rd.addMagnet(`magnet:?xt=urn:btih:${infohash}`);
+        if (rdResponse && rdResponse.id) {
+            const rd_id = rdResponse.id;
+            await models.RdTorrent.create({ infohash, rd_id, status: 'magnet_conversion' });
+
+            let isReadyForSelection = false;
+            const waitTimeout = 20000;
+            const waitInterval = 2000;
+            const waitStartTime = Date.now();
+
+            while (Date.now() - waitStartTime < waitTimeout) {
+                const torrentInfo = await rd.getTorrentInfo(rd_id);
+                if (torrentInfo.status === 'waiting_files_selection') {
+                    logger.info({ rd_id }, "Torrent is ready for file selection.");
+                    isReadyForSelection = true;
+                    break;
+                }
+                if (torrentInfo.status === 'error' || torrentInfo.status === 'magnet_error') {
+                    throw new Error(`Real-Debrid failed to parse magnet: ${torrentInfo.status}`);
+                }
+                logger.debug({ rd_id, status: torrentInfo.status }, "Waiting for Real-Debrid to parse magnet...");
+                await delay(waitInterval);
+            }
+
+            if (!isReadyForSelection) {
+                throw new Error(`Torrent ${rd_id} was not ready for file selection in time.`);
+            }
+
+            await rd.selectFiles(rd_id);
+            res.redirect(`/rd-poll/${infohash}/${episode}.json`);
+        } else {
+            throw new Error('Could not add torrent to Real-Debrid.');
+        }
     } catch (error) {
-        logger.error(error, `Critical failure during add process for infohash ${infohash}.`);
-        res.status(500).json({ error: 'Could not process torrent on Real-Debrid.' });
+        if (error instanceof rd.ResourceNotFoundError) {
+            logger.warn({ infohash }, "Stale torrent detected during add process. It will be re-added on next attempt.");
+        }
+        logger.error(error, `Failed to add infohash ${infohash} to RD.`);
+        res.status(500).json({ error: 'Could not add torrent.' });
     }
 });
 
