@@ -209,11 +209,17 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                 let episodeFileIndex = -1;
                 let episodeFile;
 
-                // --- START OF DEFINITIVE 3-LAYER MATCHING LOGIC ---
                 // Layer 1: Primary Matching Attempt (PTT-based)
                 logger.debug("Attempting Layer 1: Exact episode match with PTT...");
                 episodeFile = torrentInfo.files.find((file, index) => {
                     const pttResult = ptt.parse(file.path);
+                    // --- START OF LOGGING ENHANCEMENT ---
+                    logger.debug({ 
+                        filePath: file.path, 
+                        foundEpisode: pttResult.episode, 
+                        requested: parseInt(episode) 
+                    }, "PTT parsing result for file.");
+                    // --- END OF LOGGING ENHANCEMENT ---
                     const isMatch = pttResult.episode === parseInt(episode);
                     if (isMatch) episodeFileIndex = index;
                     return isMatch;
@@ -227,6 +233,13 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                         const match = file.path.match(regex);
                         if (match) {
                             const foundEpisode = parseInt(match[2], 10);
+                            // --- START OF LOGGING ENHANCEMENT ---
+                            logger.debug({ 
+                                filePath: file.path, 
+                                foundEpisode: foundEpisode, 
+                                requested: parseInt(episode) 
+                            }, "Regex parsing result for file.");
+                            // --- END OF LOGGING ENHANCEMENT ---
                             const isMatch = foundEpisode === parseInt(episode);
                             if (isMatch) episodeFileIndex = index;
                             return isMatch;
@@ -249,7 +262,6 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                         episodeFileIndex = torrentInfo.files.findIndex(file => file.id === episodeFile.id);
                     }
                 }
-                // --- END OF 3-LAYER MATCHING LOGIC ---
                 
                 if (episodeFile && episodeFileIndex !== -1 && torrentInfo.links[episodeFileIndex]) {
                     const unrestricted = await rd.unrestrictLink(torrentInfo.links[episodeFileIndex]);
