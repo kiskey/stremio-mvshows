@@ -419,15 +419,84 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-                        let episodeFileIndex = -1;
-                        const episodeFile = rdTorrent.files.find((file, index) => {
+
+                        
+
+                        let episodeFile;
+
+                        let linkIndex = -1;
+
+                        
+
+                        const downloadableFiles = rdTorrent.files.filter(file => file.selected === 1);
+
+
+
+                        for (let i = 0; i < downloadableFiles.length; i++) {
+
+                            const file = downloadableFiles[i];
                             const pttResult = ptt.parse(file.path);
-                            const isMatch = pttResult.episode === parseInt(episode);
-                            if (isMatch) episodeFileIndex = index;
-                            return isMatch;
-                        });
-                        if (episodeFile && episodeFileIndex !== -1 && rdTorrent.links[episodeFileIndex]) {
-                            const unrestricted = await rd.unrestrictLink(rdTorrent.links[episodeFileIndex]);
+                            let foundEpisode = pttResult.episode;
+
+        
+
+                            if (foundEpisode === undefined) {
+
+                                const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
+
+                                const match = file.path.match(regex);
+
+                                if (match) {
+
+                                    foundEpisode = parseInt(match[2], 10);
+
+                                }
+
+                            }
+
+                            
+
+                            if (foundEpisode === parseInt(episode)) {
+
+                                episodeFile = file;
+
+                                linkIndex = i;
+
+                                break;
+
+                            }
+
+                        }
+
+
+
+                        if (!episodeFile) {
+
+                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
+
+                            const videoFiles = downloadableFiles.filter(file => 
+
+                                videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext))
+
+                            );
+
+        
+
+                            if (videoFiles.length === 1) {
+
+                                episodeFile = videoFiles[0];
+
+                                linkIndex = downloadableFiles.findIndex(file => file.id === episodeFile.id);
+
+                            }
+
+                        }
+
+
+
+                        if (episodeFile && linkIndex !== -1 && rdTorrent.links[linkIndex]) {
+
+                            const unrestricted = await rd.unrestrictLink(rdTorrent.links[linkIndex]);
                             finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `S${seasonStr} | ${episodeStr}\n${episodeFile.path.substring(1)}`, quality: stream.quality });
                         } else {
                             finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nFile not found, click to re-process`, quality: stream.quality });
