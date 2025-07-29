@@ -221,13 +221,14 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                 
                 // Layer 2: Regex Fallback for alternative formats
                 if (!episodeFile) {
-                    logger.warn({ infohash, episode }, "Layer 1 (PTT) failed. Attempting Layer 2: Comprehensive Regex-based episode match...");
+                    logger.warn({ infohash, episode }, "Layer 1 (PTT) failed. Attempting Layer 2: Regex-based episode match...");
                     episodeFile = torrentInfo.files.find((file, index) => {
-                        // This regex handles S01E07, S01 Ep07, Season 1 Episode 7, etc.
-                        const regex = /(?:S|Season)[\s._-]?(\d{1,2})(?:[\s._-]*E(?:p(?:isode)?)?[\s._-]*)(\d{1,3})/i;
+                        // --- START OF DEFINITIVE FIX ---
+                        // This simpler, more targeted regex correctly handles "S01 EP07" and similar formats.
+                        const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
+                        // --- END OF DEFINITIVE FIX ---
                         const match = file.path.match(regex);
                         if (match) {
-                            // match[1] is the season number, match[2] is the episode number
                             const foundEpisode = parseInt(match[2], 10);
                             const isMatch = foundEpisode === parseInt(episode);
                             if (isMatch) episodeFileIndex = index;
