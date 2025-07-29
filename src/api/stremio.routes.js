@@ -200,17 +200,18 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
                 
-                // --- START OF ENHANCEMENT: Log file list upon download ---
                 logger.info({
                     infohash,
                     requestedEpisode: episode,
                     fileList: torrentInfo.files.map(f => f.path)
                 }, "Torrent downloaded. Analyzing file list for requested episode.");
-                // --- END OF ENHANCEMENT ---
 
                 let episodeFileIndex = -1;
                 let episodeFile;
 
+                // --- START OF 3-LAYER MATCHING LOGIC ---
+                // Layer 1: Primary Matching Attempt (PTT-based)
+                logger.debug("Attempting Layer 1: Exact episode match with PTT...");
                 episodeFile = torrentInfo.files.find((file, index) => {
                     const pttResult = ptt.parse(file.path);
                     const isMatch = pttResult.episode === parseInt(episode);
@@ -218,8 +219,25 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     return isMatch;
                 });
                 
+                // Layer 2: Regex Fallback for alternative formats
                 if (!episodeFile) {
-                    logger.warn({ infohash, episode }, "No exact episode match found. Checking for single-file season pack heuristic.");
+                    logger.warn({ infohash, episode }, "Layer 1 (PTT) failed. Attempting Layer 2: Regex-based episode match...");
+                    episodeFile = torrentInfo.files.find((file, index) => {
+                        const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
+                        const match = file.path.match(regex);
+                        if (match) {
+                            const foundEpisode = parseInt(match[2], 10);
+                            const isMatch = foundEpisode === parseInt(episode);
+                            if (isMatch) episodeFileIndex = index;
+                            return isMatch;
+                        }
+                        return false;
+                    });
+                }
+                
+                // Layer 3: Single-File Heuristic Fallback
+                if (!episodeFile) {
+                    logger.warn({ infohash, episode }, "Layer 2 (Regex) failed. Attempting Layer 3: Single-file heuristic...");
                     const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
                     const videoFiles = torrentInfo.files.filter(file => 
                         videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext))
@@ -231,18 +249,17 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                         episodeFileIndex = torrentInfo.files.findIndex(file => file.id === episodeFile.id);
                     }
                 }
+                // --- END OF 3-LAYER MATCHING LOGIC ---
                 
                 if (episodeFile && episodeFileIndex !== -1 && torrentInfo.links[episodeFileIndex]) {
                     const unrestricted = await rd.unrestrictLink(torrentInfo.links[episodeFileIndex]);
                     return res.redirect(302, unrestricted.download);
                 } else {
-                    // --- START OF ENHANCEMENT: Log failure to match ---
                     logger.error({
                         infohash,
                         requestedEpisode: episode,
                         files: torrentInfo.files.map(f => f.path)
                     }, "All matching attempts failed. Could not find a suitable file to stream.");
-                    // --- END OF ENHANCEMENT ---
                     break;
                 }
             }
