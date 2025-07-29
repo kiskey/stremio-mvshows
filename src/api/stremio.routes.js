@@ -199,20 +199,16 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             }
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
-                
                 let episodeFileIndex = -1;
                 let episodeFile;
-
-                // --- START OF CHANGE: Primary Matching Attempt ---
+                
                 episodeFile = torrentInfo.files.find((file, index) => {
                     const pttResult = ptt.parse(file.path);
                     const isMatch = pttResult.episode === parseInt(episode);
                     if (isMatch) episodeFileIndex = index;
                     return isMatch;
                 });
-                // --- END OF Primary Matching Attempt ---
-
-                // --- START OF CHANGE: Single-File Heuristic Fallback ---
+                
                 if (!episodeFile) {
                     logger.warn({ infohash, episode }, "No exact episode match found. Checking for single-file season pack heuristic.");
                     const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
@@ -223,11 +219,9 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     if (videoFiles.length === 1) {
                         logger.info({ infohash, file: videoFiles[0].path }, "Heuristic successful: Found a single video file. Selecting it.");
                         episodeFile = videoFiles[0];
-                        // Find the original index to get the correct unrestricted link
                         episodeFileIndex = torrentInfo.files.findIndex(file => file.id === episodeFile.id);
                     }
                 }
-                // --- END OF Single-File Heuristic Fallback ---
                 
                 if (episodeFile && episodeFileIndex !== -1 && torrentInfo.links[episodeFileIndex]) {
                     const unrestricted = await rd.unrestrictLink(torrentInfo.links[episodeFileIndex]);
@@ -241,10 +235,13 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
         await rdTorrent.update({ status: 'error' });
         res.status(404).json({ error: 'Torrent timed out or failed.' });
     } catch (error) {
+        // --- START OF CHANGE ---
+        // This logic now correctly DELETES the stale entry instead of just updating it.
         if (error instanceof rd.ResourceNotFoundError) {
-            logger.warn({ infohash }, "Torrent disappeared from Real-Debrid during polling. Marking as failed.");
-            await models.RdTorrent.update({ status: 'error' }, { where: { infohash } });
+            logger.warn({ infohash }, "Torrent disappeared from Real-Debrid during polling. Deleting stale local entry.");
+            await models.RdTorrent.destroy({ where: { infohash } });
         }
+        // --- END OF CHANGE ---
         logger.error(error, `Polling failed for infohash: ${infohash}`);
         res.status(500).json({ error: 'Polling failed.' });
     }
@@ -257,15 +254,10 @@ router.head('/rd-add/:infohash/:episode.json', (req, res) => {
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     const { infohash, episode } = req.params;
     if (!rd.isEnabled) return res.status(404).send('Not Found');
-    try {
-        const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
 
-        if (existingRdTorrent) {
-            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found in local DB. Redirecting to poll.");
-            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
-        }
-
-        const rdResponse = await rd.addMagnet(`magnet:?xt=urn:btih:${infohash}`);
+    const addAndProcess = async () => {
+        const magnet = `magnet:?xt=urn:btih:${infohash}`;
+        const rdResponse = await rd.addMagnet(magnet);
         if (rdResponse && rdResponse.id) {
             const rd_id = rdResponse.id;
             await models.RdTorrent.create({ infohash, rd_id, status: 'magnet_conversion' });
@@ -294,16 +286,44 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
             }
 
             await rd.selectFiles(rd_id);
-            res.redirect(`/rd-poll/${infohash}/${episode}.json`);
+            return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
         } else {
-            throw new Error('Could not add torrent to Real-Debrid.');
+            throw new Error('Could not add torrent to Real-Debrid after re-attempt.');
         }
+    };
+
+    try {
+        const existingRdTorrent = await models.RdTorrent.findByPk(infohash);
+
+        if (existingRdTorrent) {
+            logger.info({ infohash, rd_id: existingRdTorrent.rd_id }, "Existing torrent found. Attempting to verify and un-stick.");
+            try {
+                // --- START OF CHANGE ---
+                // The `getTorrentInfo` call now acts as our verification step.
+                // It will throw a ResourceNotFoundError if the torrent is stale.
+                await rd.getTorrentInfo(existingRdTorrent.rd_id);
+                // If the above line doesn't throw, the torrent is still valid on RD.
+                // We can then safely redirect to the poller.
+                return res.redirect(`/rd-poll/${infohash}/${episode}.json`);
+            } catch (error) {
+                // This is the crucial part: if the resource is gone, delete our local copy and try again.
+                if (error instanceof rd.ResourceNotFoundError) {
+                    logger.warn({ infohash, rd_id: existingRdTorrent.rd_id }, "Stale torrent found in DB. Deleting and re-adding.");
+                    await existingRdTorrent.destroy();
+                    // Call the main processing function to try again from scratch
+                    return await addAndProcess();
+                }
+                throw error; // Re-throw any other unexpected errors
+            }
+            // --- END OF CHANGE ---
+        }
+
+        // If no torrent exists in our DB, run the standard add process.
+        await addAndProcess();
+        
     } catch (error) {
-        if (error instanceof rd.ResourceNotFoundError) {
-            logger.warn({ infohash }, "Stale torrent detected during add process. It will be re-added on next attempt.");
-        }
-        logger.error(error, `Failed to add infohash ${infohash} to RD.`);
-        res.status(500).json({ error: 'Could not add torrent.' });
+        logger.error(error, `Critical failure during add process for infohash ${infohash}.`);
+        res.status(500).json({ error: 'Could not process torrent on Real-Debrid.' });
     }
 });
 
