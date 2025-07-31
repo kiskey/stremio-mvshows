@@ -6,12 +6,22 @@ const config = {
     logLevel: process.env.LOG_LEVEL || 'info',
     
     // Scraper Configuration
-    // NEW: Reads a comma-separated list of forum base URLs.
-    // Falls back to the old FORUM_URL variable for backward compatibility.
-    forumUrls: (process.env.FORUM_URLS || process.env.FORUM_URL || '')
+    // RENAMED for clarity, but still reads from the old environment variables for backward compatibility.
+    seriesForumUrls: (process.env.SERIES_FORUM_URLS || process.env.FORUM_URLS || process.env.FORUM_URL || '')
         .split(',')
         .map(url => url.trim())
-        .filter(url => url), // Filter out any empty strings if the list has trailing commas etc.
+        .filter(url => url),
+
+    // NEW: Configurable URLs for Movie Catalogs
+    movieForumUrls: (process.env.MOVIE_FORUM_URLS || '')
+        .split(',')
+        .map(url => url.trim())
+        .filter(url => url),
+
+    dubbedMovieForumUrls: (process.env.DUBBED_MOVIE_FORUM_URLS || '')
+        .split(',')
+        .map(url => url.trim())
+        .filter(url => url),
 
     scrapeStartPage: parseInt(process.env.SCRAPE_START_PAGE, 10) || 1,
     scrapeEndPage: parseInt(process.env.SCRAPE_END_PAGE, 10) || 20,
@@ -47,8 +57,9 @@ config.isRdEnabled = !!config.realDebridApiKey;
 config.isProxyEnabled = config.proxyUrls.length > 0;
 
 // Validate required variables
-if (config.forumUrls.length === 0 || !config.tmdbApiKey) {
-    throw new Error("Missing required environment variables: FORUM_URLS (or FORUM_URL), TMDB_API_KEY");
+const hasAnyForumUrl = config.seriesForumUrls.length > 0 || config.movieForumUrls.length > 0 || config.dubbedMovieForumUrls.length > 0;
+if (!hasAnyForumUrl || !config.tmdbApiKey) {
+    throw new Error("Missing required environment variables: At least one FORUM_URLS variable and TMDB_API_KEY must be set.");
 }
 
 module.exports = config;
