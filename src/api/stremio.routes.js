@@ -25,14 +25,13 @@ router.get('/manifest.json', (req, res) => {
         name: config.addonName,
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'],
-        types: ['series'],
+        types: ['series', 'movie'],
         idPrefixes: [config.addonId, 'tt'], 
-        catalogs: [{
-            type: 'series',
-            id: 'top-series-from-forum',
-            name: 'Tamil Webseries',
-            extra: [{ "name": "skip", "isRequired": false }]
-        }],
+        catalogs: [
+            { type: 'series', id: 'top-series-from-forum', name: 'Tamil Webseries', extra: [{ "name": "skip", "isRequired": false }] },
+            { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra: [{ "name": "skip", "isRequired": false }] },
+            { type: 'movie', id: 'tamil-dubbed-movies', name: 'Tamil HD Dubbed Movies', extra: [{ "name": "skip", "isRequired": false }] }
+        ],
         behaviorHints: { configurable: false, adult: false }
     };
     res.json(manifest);
@@ -44,58 +43,74 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || 0);
     }
-    if (type !== 'series' || id !== 'top-series-from-forum') {
-        return res.status(404).json({ err: 'Not Found' });
+    
+    if (type === 'series' && id === 'top-series-from-forum') {
+        return getSeriesCatalog(req, res, skip);
     }
+    if (type === 'movie' && (id === 'tamil-hd-movies' || id === 'tamil-dubbed-movies')) {
+        return getMovieCatalog(req, res, skip);
+    }
+    
+    return res.status(404).json({ err: 'Not Found' });
+});
+
+async function getSeriesCatalog(req, res, skip) {
     const limit = 100;
     try {
         const allThreads = await models.Thread.findAll({
-            include: [{
-                model: models.TmdbMetadata,
-                required: false 
-            }],
-            order: [
-                [models.TmdbMetadata, 'year', 'DESC'], 
-                ['updatedAt', 'DESC']                 
-            ],
+            where: { type: 'series' },
+            include: [{ model: models.TmdbMetadata, required: false }],
+            order: [[models.TmdbMetadata, 'year', 'DESC'], ['updatedAt', 'DESC']],
             offset: skip,
             limit: limit
         });
-
         const metas = allThreads.map(thread => {
             if (thread.status === 'linked' && thread.TmdbMetadatum) {
                 const meta = thread.TmdbMetadatum;
                 const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
-                return {
-                    id: `${config.addonId}:${meta.imdb_id}`,
-                    type: 'series',
-                    name: parsedData.title,
-                    poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
-                };
-            }
-            else if (thread.status === 'pending_tmdb') {
-                 return {
-                    id: `${config.addonId}:pending:${thread.id}`, 
-                    type: 'series',
-                    name: `[PENDING] ${thread.clean_title}`,
-                    poster: thread.custom_poster || config.placeholderPoster,
-                    description: thread.custom_description || `This item is pending an official metadata match.`
-                };
+                return { id: `${config.addonId}:${meta.imdb_id}`, type: 'series', name: parsedData.title, poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null, };
+            } else if (thread.status === 'pending_tmdb') {
+                 return { id: `${config.addonId}:pending:${thread.id}`, type: 'series', name: `[PENDING] ${thread.clean_title}`, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || `This item is pending an official metadata match.` };
             }
             return null;
         }).filter(meta => meta);
-
-        res.json({ metas: metas });
-
+        res.json({ metas });
     } catch (error) {
-        logger.error(error, "Failed to fetch catalog data.");
+        logger.error(error, "Failed to fetch series catalog data.");
         res.status(500).json({ err: 'Internal Server Error' });
     }
-});
+}
+
+async function getMovieCatalog(req, res, skip) {
+    const limit = 100;
+    try {
+        const allThreads = await models.Thread.findAll({
+            where: { type: 'movie' },
+            include: [{ model: models.TmdbMetadata, required: true }],
+            order: [['postedAt', 'DESC']],
+            offset: skip,
+            limit: limit
+        });
+        const metas = allThreads.map(thread => {
+            const meta = thread.TmdbMetadatum;
+            const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
+            return {
+                id: `${config.addonId}:${meta.imdb_id}`,
+                type: 'movie',
+                name: parsedData.title,
+                poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
+            };
+        });
+        res.json({ metas });
+    } catch (error) {
+        logger.error(error, "Failed to fetch movie catalog data.");
+        res.status(500).json({ err: 'Internal Server Error' });
+    }
+}
 
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
-    if (type !== 'series' || !id.startsWith(config.addonId)) {
+    if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
         return res.status(404).json({ err: 'Not Found' });
     }
 
@@ -107,7 +122,7 @@ router.get('/meta/:type/:id.json', async (req, res) => {
             const threadId = idParts[2];
             const thread = await models.Thread.findByPk(threadId);
             if (!thread || thread.status !== 'pending_tmdb') return res.status(404).json({ err: 'Pending item not found' });
-            return res.json({ meta: { id: id, type: 'series', name: thread.clean_title, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || 'Metadata is pending.', releaseInfo: thread.year ? thread.year.toString() : '' } });
+            return res.json({ meta: { id: id, type: thread.type, name: thread.clean_title, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || 'Metadata is pending.', releaseInfo: thread.year ? thread.year.toString() : '' } });
         }
 
         if (itemTypeOrImdbId.startsWith('tt')) {
@@ -115,55 +130,51 @@ router.get('/meta/:type/:id.json', async (req, res) => {
             const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id } });
             if (!metaRecord) return res.status(404).json({ err: 'Metadata not found in local database.' });
 
-            const streams = await models.Stream.findAll({
-                where: { tmdb_id: metaRecord.tmdb_id },
-                attributes: ['season', 'episode', 'episode_end'],
-                order: [['season', 'ASC'], ['episode', 'ASC']],
-                raw: true,
-            });
-
-            const uniqueSeasonNumbers = [...new Set(streams.map(s => s.season))];
-            const episodeDataPromises = uniqueSeasonNumbers.map(seasonNum => getTmdbEpisodeData(metaRecord.tmdb_id, seasonNum));
-            const seasonsData = await Promise.all(episodeDataPromises);
-            
-            const episodeDataMap = new Map();
-            seasonsData.flat().forEach(ep => {
-                episodeDataMap.set(`s${ep.season_number}e${ep.episode_number}`, ep);
-            });
-
-            const videos = [];
-            const uniqueEpisodes = new Set();
-            for (const s of streams) {
-                const episodeStart = s.episode;
-                const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
-                for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
-                    const uniqueKey = `s${s.season}e${epNum}`;
-                    if (uniqueEpisodes.has(uniqueKey)) continue;
-                    const richEpisodeData = episodeDataMap.get(uniqueKey);
-
-                    videos.push({
-                        season: s.season,
-                        episode: epNum,
-                        id: `${id}:${s.season}:${epNum}`,
-                        title: richEpisodeData?.name || `Episode ${epNum}`,
-                        released: richEpisodeData?.air_date ? new Date(richEpisodeData.air_date).toISOString() : new Date(metaRecord.year, s.season - 1, epNum).toISOString(),
-                        thumbnail: richEpisodeData?.still_path ? `https://image.tmdb.org/t/p/w500${richEpisodeData.still_path}` : null,
-                        overview: richEpisodeData?.overview || null,
-                    });
-                    uniqueEpisodes.add(uniqueKey);
-                }
-            }
-
             const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
             const metaObject = {
-                id: id, type: 'series', name: tmdbData.title,
+                id: id, type: tmdbData.media_type, name: tmdbData.title,
                 poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
                 background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
                 description: tmdbData.overview,
                 releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
-                year: metaRecord.year,
-                videos: videos,
+                year: metaRecord.year
             };
+
+            if (tmdbData.media_type === 'series') {
+                const streams = await models.Stream.findAll({
+                    where: { tmdb_id: metaRecord.tmdb_id },
+                    attributes: ['season', 'episode', 'episode_end'],
+                    order: [['season', 'ASC'], ['episode', 'ASC']],
+                    raw: true,
+                });
+                const uniqueSeasonNumbers = [...new Set(streams.map(s => s.season))];
+                const episodeDataPromises = uniqueSeasonNumbers.map(seasonNum => getTmdbEpisodeData(metaRecord.tmdb_id, seasonNum));
+                const seasonsData = await Promise.all(episodeDataPromises);
+                const episodeDataMap = new Map();
+                seasonsData.flat().forEach(ep => episodeDataMap.set(`s${ep.season_number}e${ep.episode_number}`, ep));
+
+                const videos = [];
+                const uniqueEpisodes = new Set();
+                for (const s of streams) {
+                    const episodeStart = s.episode;
+                    const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
+                    for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
+                        const uniqueKey = `s${s.season}e${epNum}`;
+                        if (uniqueEpisodes.has(uniqueKey)) continue;
+                        const richEpisodeData = episodeDataMap.get(uniqueKey);
+                        videos.push({
+                            season: s.season, episode: epNum, id: `${id}:${s.season}:${epNum}`,
+                            title: richEpisodeData?.name || `Episode ${epNum}`,
+                            released: richEpisodeData?.air_date ? new Date(richEpisodeData.air_date).toISOString() : new Date(metaRecord.year, s.season - 1, epNum).toISOString(),
+                            thumbnail: richEpisodeData?.still_path ? `https://image.tmdb.org/t/p/w500${richEpisodeData.still_path}` : null,
+                            overview: richEpisodeData?.overview || null,
+                        });
+                        uniqueEpisodes.add(uniqueKey);
+                    }
+                }
+                metaObject.videos = videos;
+            }
+
             return res.json({ meta: metaObject });
         }
         
@@ -200,27 +211,19 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
             if (torrentInfo && torrentInfo.status === 'downloaded') {
                 await rdTorrent.update({ status: 'downloaded', files: torrentInfo.files, links: torrentInfo.links, last_checked: new Date() });
                 
-                // --- START OF DEFINITIVE FIX ---
-                // First, create a clean list of only the downloadable files.
-                // This is the key to solving the index mismatch problem.
-                const downloadableFiles = torrentInfo.files.filter(file => file.selected === 1);
-
                 logger.debug({
                     infohash,
                     requestedEpisode: episode,
-                    totalFiles: torrentInfo.files.length,
-                    downloadableFiles: downloadableFiles.length,
-                    linksCount: torrentInfo.links.length,
-                    // DUMP THE JSON FOR DEBUGGING
-                    files: torrentInfo.files,
-                    links: torrentInfo.links
+                    filesJson: JSON.stringify(torrentInfo.files),
+                    linksJson: JSON.stringify(torrentInfo.links)
                 }, "Torrent downloaded. Analyzing file list for requested episode.");
 
                 let episodeFile;
                 let linkIndex = -1;
+                
+                const downloadableFiles = torrentInfo.files.filter(file => file.selected === 1);
 
-                // Layer 1 & 2: Combined PTT and Regex Heuristic
-                logger.debug("Attempting Layer 1 & 2: PTT and Regex parsing...");
+                logger.debug("Attempting Layer 1 & 2: PTT and Regex parsing on downloadable files...");
                 for (let i = 0; i < downloadableFiles.length; i++) {
                     const file = downloadableFiles[i];
                     const pttResult = ptt.parse(file.path);
@@ -236,12 +239,11 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     
                     if (foundEpisode === parseInt(episode)) {
                         episodeFile = file;
-                        linkIndex = i; // The index in the downloadableFiles and links arrays
-                        break; // Stop searching once a match is found
+                        linkIndex = i;
+                        break;
                     }
                 }
                 
-                // Layer 3: Single-File Heuristic Fallback
                 if (!episodeFile) {
                     logger.warn({ infohash, episode }, "Layers 1 & 2 failed. Attempting Layer 3: Single-file heuristic...");
                     const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
@@ -269,7 +271,6 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     }, "All matching attempts failed. Could not find a suitable file to stream.");
                     break;
                 }
-                // --- END OF DEFINITIVE FIX ---
             }
             await delay(pollInterval);
         }
@@ -357,7 +358,8 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
 });
 
 router.get('/stream/:type/:id.json', async (req, res) => {
-    if (req.params.type !== 'series') {
+    const { type, id } = req.params;
+    if (type !== 'series' && type !== 'movie') {
         return res.status(404).json({ streams: [] });
     }
     
@@ -379,140 +381,116 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         for (const magnet_uri of thread.magnet_uris) {
                             const parsed = parser.parseMagnet(magnet_uri);
                             if (!parsed) continue;
-                            let episodeStr;
-                            if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
-                            else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
-                            else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
-                            
-                            finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `S${String(parsed.season).padStart(2, '0')} | ${episodeStr}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
+                            if (thread.type === 'movie') {
+                                finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `${thread.clean_title}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
+                            } else {
+                                let episodeStr;
+                                if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
+                                else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
+                                else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
+                                finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `S${String(parsed.season).padStart(2, '0')} | ${episodeStr}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
+                            }
                         }
                     }
                 }
             } else if (itemTypeOrImdbId.startsWith('tt')) {
-                if (idParts.length < 4) return res.json({ streams: [] });
                 imdb_id = itemTypeOrImdbId;
-                season = idParts[2];
-                episode = idParts[3];
+                if (type === 'series') {
+                    if (idParts.length < 4) return res.json({ streams: [] });
+                    season = idParts[2];
+                    episode = idParts[3];
+                }
             }
         } else if (requestedId.startsWith('tt')) {
             const idParts = requestedId.split(':');
-            if (idParts.length < 3) return res.json({ streams: [] });
             imdb_id = idParts[0];
-            season = idParts[1];
-            episode = idParts[2];
+            if (type === 'series') {
+                if (idParts.length < 3) return res.json({ streams: [] });
+                season = idParts[1];
+                episode = idParts[2];
+            }
         }
 
-        if (imdb_id && season && episode) {
+        if (imdb_id) {
             const meta = await models.TmdbMetadata.findOne({ where: { imdb_id }});
             if (!meta) return res.json({ streams: [] });
 
-            const dbStreams = await models.Stream.findAll({
-                where: { tmdb_id: meta.tmdb_id, season, episode: { [Op.lte]: episode }, episode_end: { [Op.gte]: episode } }
-            });
+            const whereClause = { tmdb_id: meta.tmdb_id };
+            if (type === 'series' && season && episode) {
+                whereClause.season = season;
+                whereClause.episode = { [Op.lte]: episode };
+                whereClause.episode_end = { [Op.gte]: episode };
+            } else if (type === 'movie') {
+                whereClause.season = null;
+                whereClause.episode = null;
+            }
+            const dbStreams = await models.Stream.findAll({ where: whereClause });
 
             if (rd.isEnabled) {
                  for (const stream of dbStreams) {
-                    const seasonStr = String(stream.season).padStart(2, '0');
-                    let episodeStr;
-                    if (!stream.episode_end || stream.episode_end === stream.episode) episodeStr = `Episode ${String(stream.episode).padStart(2, '0')}`;
-                    else if (stream.episode === 1 && stream.episode_end === 999) episodeStr = 'Season Pack';
-                    else episodeStr = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
+                    let titleDetail = '';
+                    if (type === 'series') {
+                        const seasonStr = String(stream.season).padStart(2, '0');
+                        if (!stream.episode_end || stream.episode_end === stream.episode) titleDetail = `Episode ${String(stream.episode).padStart(2, '0')}`;
+                        else if (stream.episode === 1 && stream.episode_end === 999) titleDetail = 'Season Pack';
+                        else titleDetail = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
+                        titleDetail = `S${seasonStr} | ${titleDetail}`;
+                    }
+
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
-
-                        
-
-                        let episodeFile;
-
+                        let fileToStream;
                         let linkIndex = -1;
-
-                        
-
                         const downloadableFiles = rdTorrent.files.filter(file => file.selected === 1);
 
-
-
-                        for (let i = 0; i < downloadableFiles.length; i++) {
-
-                            const file = downloadableFiles[i];
-                            const pttResult = ptt.parse(file.path);
-                            let foundEpisode = pttResult.episode;
-
-        
-
-                            if (foundEpisode === undefined) {
-
-                                const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
-
-                                const match = file.path.match(regex);
-
-                                if (match) {
-
-                                    foundEpisode = parseInt(match[2], 10);
-
+                        if (type === 'movie') {
+                            const videoExtensions = ['.mkv', '.mp4', '.avi'];
+                            const videoFiles = downloadableFiles.filter(file => videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext)));
+                            if (videoFiles.length > 0) {
+                                fileToStream = videoFiles.reduce((largest, current) => current.bytes > largest.bytes ? current : largest, videoFiles[0]);
+                                linkIndex = downloadableFiles.findIndex(f => f.id === fileToStream.id);
+                            }
+                        } else { // Series logic
+                            for (let i = 0; i < downloadableFiles.length; i++) {
+                                const file = downloadableFiles[i];
+                                let foundEpisode;
+                                const pttResult = ptt.parse(file.path);
+                                foundEpisode = pttResult.episode;
+                                if (foundEpisode === undefined) {
+                                    const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
+                                    const match = file.path.match(regex);
+                                    if (match) foundEpisode = parseInt(match[2], 10);
                                 }
-
+                                if (foundEpisode === parseInt(episode)) {
+                                    fileToStream = file;
+                                    linkIndex = i;
+                                    break;
+                                }
                             }
-
-                            
-
-                            if (foundEpisode === parseInt(episode)) {
-
-                                episodeFile = file;
-
-                                linkIndex = i;
-
-                                break;
-
-                            }
-
                         }
 
-
-
-                        if (!episodeFile) {
-
-                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
-
-                            const videoFiles = downloadableFiles.filter(file => 
-
-                                videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext))
-
-                            );
-
-        
-
-                            if (videoFiles.length === 1) {
-
-                                episodeFile = videoFiles[0];
-
-                                linkIndex = downloadableFiles.findIndex(file => file.id === episodeFile.id);
-
-                            }
-
-                        }
-
-
-
-                        if (episodeFile && linkIndex !== -1 && rdTorrent.links[linkIndex]) {
-
+                        if (fileToStream && linkIndex !== -1 && rdTorrent.links[linkIndex]) {
                             const unrestricted = await rd.unrestrictLink(rdTorrent.links[linkIndex]);
-                            finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `S${seasonStr} | ${episodeStr}\n${episodeFile.path.substring(1)}`, quality: stream.quality });
+                            finalStreams.push({ name: `[RD+] ${stream.quality} ⚡️`, url: unrestricted.download, title: `${titleDetail}\n${fileToStream.path.substring(1)}`, quality: stream.quality });
                         } else {
-                            finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nFile not found, click to re-process`, quality: stream.quality });
+                            finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode || 1}.json`, title: `${titleDetail}\nFile not found`, quality: stream.quality });
                         }
                     } else {
-                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode}.json`, title: `S${seasonStr} | ${episodeStr}\nClick to Download to Real-Debrid`, quality: stream.quality });
+                        finalStreams.push({ name: `[RD] ${stream.quality} ⏳`, url: `${config.appHost}/rd-add/${stream.infohash}/${episode || 1}.json`, title: `${titleDetail}\nClick to Download`, quality: stream.quality });
                     }
                 }
             } else {
-                finalStreams = dbStreams.map(s => {
-                    const seasonStr = String(s.season).padStart(2, '0');
-                    let episodeStr;
-                    if (!s.episode_end || s.episode_end === s.episode) episodeStr = `Episode ${String(s.episode).padStart(2, '0')}`;
-                    else if (s.episode === 1 && s.episode_end === 999) episodeStr = 'Season Pack';
-                    else episodeStr = `Episodes ${String(s.episode).padStart(2, '0')}-${String(s.episode_end).padStart(2, '0')}`;
-                    return { infoHash: s.infohash, name: `[TamilMV - P2P] - ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
+                 finalStreams = dbStreams.map(s => {
+                    if (type === 'movie') {
+                        return { infoHash: s.infohash, name: `[P2P] ${s.quality || 'SD'} 📺`, title: `${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
+                    } else {
+                        const seasonStr = String(s.season).padStart(2, '0');
+                        let episodeStr;
+                        if (!s.episode_end || s.episode_end === s.episode) episodeStr = `Episode ${String(s.episode).padStart(2, '0')}`;
+                        else if (s.episode === 1 && s.episode_end === 999) episodeStr = 'Season Pack';
+                        else episodeStr = `Episodes ${String(s.episode).padStart(2, '0')}-${String(s.episode_end).padStart(2, '0')}`;
+                        return { infoHash: s.infohash, name: `[P2P] ${s.quality || 'SD'} 📺`, title: `S${seasonStr} | ${episodeStr}\n${s.quality || 'SD'} | ${s.language || 'N/A'}`, quality: s.quality };
+                    }
                 });
             }
         }
