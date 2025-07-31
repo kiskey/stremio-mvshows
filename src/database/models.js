@@ -10,6 +10,10 @@ module.exports = (sequelize) => {
         year: DataTypes.INTEGER,
         tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
         status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
+        // NEW: Column to store the content type ('movie' or 'series')
+        type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'series' },
+        // NEW: Column to store the original post timestamp for sorting
+        postedAt: { type: DataTypes.DATE, allowNull: true },
         magnet_uris: { type: DataTypes.JSON, allowNull: true },
         custom_poster: { type: DataTypes.STRING, allowNull: true },
         custom_description: { type: DataTypes.TEXT, allowNull: true },
@@ -26,8 +30,9 @@ module.exports = (sequelize) => {
     const Stream = sequelize.define('Stream', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         tmdb_id: { type: DataTypes.STRING, allowNull: false },
-        season: { type: DataTypes.INTEGER, allowNull: false },
-        episode: { type: DataTypes.INTEGER, allowNull: false },
+        // Season and episode are now optional to support movies
+        season: { type: DataTypes.INTEGER, allowNull: true },
+        episode: { type: DataTypes.INTEGER, allowNull: true },
         episode_end: { type: DataTypes.INTEGER, allowNull: true },
         infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
         quality: DataTypes.STRING,
