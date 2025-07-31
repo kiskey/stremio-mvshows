@@ -56,51 +56,56 @@ const createCrawler = (crawledData) => {
     });
 };
 
+// --- START OF DEFINITIVE FIX for SCRAPER ---
 async function handleListPage({ $, log, crawler, request }) {
-    // The type ('movie' or 'series') is passed in userData from the initial request
     const { type } = request.userData;
-
-    const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
     const newRequests = [];
+    const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
-    $('div[data-rowid]').each((index, element) => {
-        const row = $(element);
-        const linkEl = row.find(detailLinkSelector);
-        const url = linkEl.attr('href');
-        const raw_title = linkEl.text().trim();
+    // This is a more robust way to find each thread item
+    $(detailLinkSelector).each((index, element) => {
+        const linkEl = $(element);
+        // Traverse up to the parent container that holds all the info for a single thread
+        const threadContainer = linkEl.closest('div.ipsDataItem');
 
-        // NEW: Parse the postedAt timestamp
-        const timeEl = row.find('time[datetime]');
-        const postedAt = timeEl.attr('datetime') ? new Date(timeEl.attr('datetime')) : null;
+        if (threadContainer.length > 0) {
+            const url = linkEl.attr('href');
+            const raw_title = linkEl.text().trim();
+            const timeEl = threadContainer.find('time[datetime]');
+            const postedAt = timeEl.attr('datetime') ? new Date(timeEl.attr('datetime')) : null;
 
-        if (url && raw_title) {
-            newRequests.push({ 
-                url, 
-                label: 'DETAIL', 
-                userData: { raw_title, type, postedAt } // Pass type and postedAt to detail page
-            });
+            if (url && raw_title) {
+                newRequests.push({ 
+                    url, 
+                    label: 'DETAIL', 
+                    userData: { raw_title, type, postedAt }
+                });
+            }
         }
     });
+    // --- END OF DEFINITIVE FIX for SCRAPER ---
 
     if (newRequests.length > 0) {
         log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
+    } else {
+        log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
     }
 }
 
 async function handleDetailPage({ $, request, log }, crawledData) {
     const { userData } = request;
-    const { raw_title, type, postedAt } = userData; // Receive type and postedAt
+    const { raw_title, type, postedAt } = userData;
     
     const magnetSelector = 'a[href^="magnet:?"]';
     const magnet_uris = $(magnetSelector).map((i, el) => $(el).attr('href')).get();
 
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
-        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt }); // Add type and postedAt to final data
+        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
         logger.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
-        log.warning(`No magnet links found on detail page for "${raw_title}"`);
+        log.warn(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
@@ -109,7 +114,6 @@ const runCrawler = async () => {
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     
-    // This function adds scrape tasks for a given set of URLs and a type
     const addScrapeTasks = (urls, type) => {
         urls.forEach(baseUrl => {
             const cleanBaseUrl = baseUrl.replace(/\/$/, '');
@@ -120,10 +124,9 @@ const runCrawler = async () => {
         });
     };
 
-    // Build the full list of requests from all configured sources
     addScrapeTasks(config.seriesForumUrls, 'series');
     addScrapeTasks(config.movieForumUrls, 'movie');
-    addScrapeTasks(config.dubbedMovieForumUrls, 'movie'); // Dubbed movies are still type 'movie'
+    addScrapeTasks(config.dubbedMovieForumUrls, 'movie');
 
     const logInfo = {
         totalRequests: startRequests.length,
