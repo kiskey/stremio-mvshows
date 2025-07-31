@@ -4,7 +4,7 @@ const parser = require('./parser');
 const metadata = require('./metadata');
 const crud = require('../database/crud');
 const logger = require('../utils/logger');
-const { models, sequelize } = require('../database/connection'); // Import sequelize for transactions
+const { models, sequelize } = require('../database/connection');
 
 let isCrawling = false;
 let dashboardCache = { linked: 0, pending: 0, failed: 0, lastUpdated: null };
@@ -40,7 +40,7 @@ const runFullWorkflow = async () => {
         let skippedCount = 0;
 
         for (const threadData of allScrapedThreads) {
-            const { thread_hash, raw_title, magnet_uris } = threadData;
+            const { thread_hash, raw_title, magnet_uris, type, postedAt } = threadData; // Get new fields
 
             const existingThread = await models.Thread.findOne({ where: { raw_title } });
 
@@ -55,19 +55,16 @@ const runFullWorkflow = async () => {
             }
             
             processedCount++;
-            logger.info(`Processing new or updated thread: ${raw_title}`);
+            logger.info({ title: raw_title, type }, `Processing new or updated thread.`);
 
             const parsedTitle = parser.parseTitle(raw_title);
             if (!parsedTitle) {
-                // This is a pre-processing failure, can be logged without a transaction
                 await crud.logFailedThread(thread_hash, raw_title, 'Title parsing failed critically.');
                 continue;
             }
 
             const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year);
             
-            // --- TRANSACTION START ---
-            // All subsequent DB writes for this item will be atomic.
             const t = await sequelize.transaction();
             try {
                 if (tmdbData && tmdbData.dbEntry) {
@@ -76,33 +73,35 @@ const runFullWorkflow = async () => {
                     await crud.createOrUpdateThread({
                         thread_hash, raw_title, clean_title: parsedTitle.clean_title, 
                         year: parsedTitle.year, tmdb_id: dbEntry.tmdb_id, 
-                        status: 'linked', magnet_uris: null
+                        status: 'linked', magnet_uris: null,
+                        type, postedAt // Save new fields
                     }, { transaction: t });
 
                     const streamsToCreate = [];
                     for (const magnet_uri of magnet_uris) {
                         const streamDetails = parser.parseMagnet(magnet_uri); 
-                        if (streamDetails && streamDetails.season) {
+                        if (streamDetails) { // Loosen check to allow movies without season
                             let streamEntry = {
                                 tmdb_id: dbEntry.tmdb_id,
-                                season: streamDetails.season,
                                 infohash: streamDetails.infohash,
                                 quality: streamDetails.quality,
                                 language: streamDetails.language
                             };
-                            if (streamDetails.type === 'SEASON_PACK') {
-                                streamEntry.episode = 1;
-                                streamEntry.episode_end = 999;
-                            } else if (streamDetails.type === 'EPISODE_PACK') {
-                                streamEntry.episode = streamDetails.episodeStart;
-                                streamEntry.episode_end = streamDetails.episodeEnd;
-                            } else if (streamDetails.type === 'SINGLE_EPISODE') {
-                                streamEntry.episode = streamDetails.episode;
-                                streamEntry.episode_end = streamDetails.episode;
+                            // Handle series-specific data
+                            if (type === 'series' && streamDetails.season) {
+                                streamEntry.season = streamDetails.season;
+                                if (streamDetails.type === 'SEASON_PACK') {
+                                    streamEntry.episode = 1;
+                                    streamEntry.episode_end = 999;
+                                } else if (streamDetails.type === 'EPISODE_PACK') {
+                                    streamEntry.episode = streamDetails.episodeStart;
+                                    streamEntry.episode_end = streamDetails.episodeEnd;
+                                } else if (streamDetails.type === 'SINGLE_EPISODE') {
+                                    streamEntry.episode = streamDetails.episode;
+                                    streamEntry.episode_end = streamDetails.episode;
+                                }
                             }
-                            if (streamEntry.episode) {
-                                streamsToCreate.push(streamEntry);
-                            }
+                            streamsToCreate.push(streamEntry);
                         }
                     }
                     if (streamsToCreate.length > 0) {
@@ -115,18 +114,17 @@ const runFullWorkflow = async () => {
                         thread_hash, raw_title, clean_title: parsedTitle.clean_title,
                         year: parsedTitle.year, tmdb_id: null,
                         status: 'pending_tmdb', magnet_uris: magnet_uris,
+                        type, postedAt // Save new fields
                     }, { transaction: t });
                 }
 
-                await t.commit(); // If all operations succeed, commit the changes
+                await t.commit();
 
             } catch (error) {
-                await t.rollback(); // If any operation fails, roll back all changes
+                await t.rollback();
                 logger.error(error, `Transaction failed for thread "${raw_title}". Rolling back changes.`);
-                // Optionally log to failed threads table here as well
                 await crud.logFailedThread(thread_hash, raw_title, 'DB transaction failed.');
             }
-            // --- TRANSACTION END ---
         }
         logger.info({
             totalScraped: allScrapedThreads.length,
