@@ -375,21 +375,19 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
             if (itemTypeOrImdbId === 'pending') {
                 const threadId = idParts[2];
-                if (threadId) {
-                    const thread = await models.Thread.findByPk(threadId);
-                    if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
-                        for (const magnet_uri of thread.magnet_uris) {
-                            const parsed = parser.parseMagnet(magnet_uri);
-                            if (!parsed) continue;
-                            if (thread.type === 'movie') {
-                                finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `${thread.clean_title}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
-                            } else {
-                                let episodeStr;
-                                if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
-                                else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
-                                else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
-                                finalStreams.push({ infoHash: parsed.infohash, name: `[TamilMV - P2P] - ${parsed.quality || 'SD'} 📺`, title: `S${String(parsed.season).padStart(2, '0')} | ${episodeStr}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
-                            }
+                const thread = await models.Thread.findByPk(threadId);
+                if (thread && thread.status === 'pending_tmdb' && thread.magnet_uris) {
+                    for (const magnet_uri of thread.magnet_uris) {
+                        const parsed = parser.parseMagnet(magnet_uri);
+                        if (!parsed) continue;
+                        if (thread.type === 'movie') {
+                            finalStreams.push({ infoHash: parsed.infohash, name: `[P2P] ${parsed.quality || 'SD'} 📺`, title: `${thread.clean_title}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
+                        } else {
+                            let episodeStr;
+                            if (parsed.type === 'SEASON_PACK') episodeStr = 'Season Pack';
+                            else if (parsed.type === 'EPISODE_PACK') episodeStr = `Episodes ${String(parsed.episodeStart).padStart(2, '0')}-${String(parsed.episodeEnd).padStart(2, '0')}`;
+                            else episodeStr = `Episode ${String(parsed.episode).padStart(2, '0')}`;
+                            finalStreams.push({ infoHash: parsed.infohash, name: `[P2P] ${parsed.quality || 'SD'} 📺`, title: `S${String(parsed.season).padStart(2, '0')} | ${episodeStr}\n${parsed.quality || 'SD'}`, quality: parsed.quality });
                         }
                     }
                 }
@@ -428,7 +426,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
             if (rd.isEnabled) {
                  for (const stream of dbStreams) {
-                    const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
                     let titleDetail = '';
                     if (type === 'series') {
                         const seasonStr = String(stream.season).padStart(2, '0');
@@ -436,8 +433,14 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         else if (stream.episode === 1 && stream.episode_end === 999) titleDetail = 'Season Pack';
                         else titleDetail = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
                         titleDetail = `S${seasonStr} | ${titleDetail}`;
+                    } else {
+                        const metaData = await models.TmdbMetadata.findOne({where: {tmdb_id: stream.tmdb_id}, raw: true});
+                        if(metaData) {
+                            titleDetail = JSON.parse(metaData.data).title;
+                        }
                     }
 
+                    const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
                     if (rdTorrent && rdTorrent.status === 'downloaded' && rdTorrent.files && rdTorrent.links) {
                         let fileToStream;
                         let linkIndex = -1;
@@ -450,7 +453,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                                 fileToStream = videoFiles.reduce((largest, current) => current.bytes > largest.bytes ? current : largest, videoFiles[0]);
                                 linkIndex = downloadableFiles.findIndex(f => f.id === fileToStream.id);
                             }
-                        } else { // Series logic
+                        } else {
                             for (let i = 0; i < downloadableFiles.length; i++) {
                                 const file = downloadableFiles[i];
                                 let foundEpisode;
@@ -496,15 +499,9 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         }
 
         if (finalStreams.length === 0) return res.json({ streams: [] });
-        
         finalStreams.sort(sortStreamsByQuality);
-
-        const uniqueStreams = finalStreams.filter((stream, index, self) => 
-            index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))
-        ).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
-
+        const uniqueStreams = finalStreams.filter((stream, index, self) => index === self.findIndex((s) => (s.url || s.infoHash) === (stream.url || stream.infoHash))).map(s => ({ ...s, sources: s.url ? undefined : [ `dht:${s.infoHash}`, ...getTrackers() ] }));
         res.json({ streams: uniqueStreams });
-
     } catch (error) {
         logger.error(error, `Failed to get streams for ID: ${requestedId}`);
         res.status(500).json({ streams: [], error: error.message });
