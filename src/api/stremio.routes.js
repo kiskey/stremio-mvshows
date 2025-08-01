@@ -29,7 +29,15 @@ router.get('/manifest.json', (req, res) => {
         description: config.addonDescription,
         resources: ['catalog', 'stream', 'meta'],
         types: ['series', 'movie'],
-        idPrefixes: [config.addonId, 'tt'], 
+        // --- START OF FIX R7 ---
+        // We only provide metadata for our own custom IDs (e.g., pending items).
+        // By removing 'tt', we tell Stremio not to ask us for metadata for standard
+        // IMDb IDs, which it can get from its own sources (like Cinemata).
+        // This prevents Stremio from getting confused by our 404 response and failing
+        // to request streams from us afterwards. Stremio will still ask for streams
+        // for 'tt...' IDs because we have 'stream' in our resources.
+        idPrefixes: [config.addonId], 
+        // --- END OF FIX R7 ---
         catalogs: [
             { type: 'series', id: 'top-series-from-forum', name: 'Tamil Webseries', extra: [{ "name": "skip", "isRequired": false }] },
             { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra: [{ "name": "skip", "isRequired": false }] },
@@ -131,6 +139,7 @@ async function getMovieCatalog(req, res, skip, catalogId) {
 
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
+    // This logic is now correct. It should only handle IDs that start with our addon's ID prefix.
     if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
         return res.status(404).json({ err: 'Not Found' });
     }
