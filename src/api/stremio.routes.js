@@ -2,7 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const config = require('../config/config');
-const { models } = require('../database/connection');
+// --- START OF FIX R6 ---
+// Import sequelize instance to use its literal helper for complex ordering.
+const { models, sequelize } = require('../database/connection');
+// --- END OF FIX R6 ---
 const rd = require('../services/realdebrid');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
@@ -60,7 +63,14 @@ async function getSeriesCatalog(req, res, skip) {
         const allThreads = await models.Thread.findAll({
             where: { type: 'series' },
             include: [{ model: models.TmdbMetadata, required: false }],
-            order: [[models.TmdbMetadata, 'year', 'DESC'], ['updatedAt', 'DESC']],
+            // --- START OF FIX R6 ---
+            // Sort by status first to push pending items to the bottom.
+            // Then, sort by the actual post date to show the newest content first.
+            order: [
+                [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
+                ['postedAt', 'DESC']
+            ],
+            // --- END OF FIX R6 ---
             offset: skip,
             limit: limit
         });
