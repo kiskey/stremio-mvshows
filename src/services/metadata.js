@@ -90,7 +90,11 @@ const formatTmdbData = async (tmdbResult) => {
 
     try {
         const externalIdsResponse = await tmdbApi.get(`/${media_type}/${tmdbResult.id}/external_ids`);
-        imdb_id = externalIdsResponse.data.imdb_id;
+        // --- START OF FIX R4 ---
+        // Ensure imdb_id is stored as null if it's an empty string or other falsy value
+        // to prevent unique constraint violations in the database.
+        imdb_id = externalIdsResponse.data.imdb_id || null;
+        // --- END OF FIX R4 ---
     } catch (e) {
         logger.warn(`Could not fetch external IDs for TMDB ID ${tmdbResult.id}.`);
     }
