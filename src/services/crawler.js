@@ -1,8 +1,9 @@
 // src/services/crawler.js
-const { CheerioCrawler } = require('crawlee');
+const { CheerioCrawler, log } = require('crawlee'); // --- DEFINITIVE FIX: Import log directly from crawlee ---
 const crypto = require('crypto');
-const logger = require('../utils/logger');
 const config = require('../config/config');
+// The global pino logger is still used for top-level logs outside the crawler context.
+const logger = require('../utils/logger');
 
 let proxyIndex = 0;
 
@@ -26,32 +27,30 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                crawlingContext.log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
+                // --- DEFINITIVE FIX: Use the imported log instance ---
+                log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
                 gotOptions.json = { pageURL: originalUrl };
             }
         ],
 
-        async requestHandler(context) {
-            const { request, $ } = context;
-
+        async requestHandler({ request, $, crawler, response }) {
             if (!$ || typeof $.html !== 'function') {
-                context.log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
+                log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: response?.headers['content-type'] });
                 return;
             }
             
             const { label } = request;
             switch (label) {
-                case 'LIST': await handleListPage(context, crawledData); break;
-                case 'DETAIL': await handleDetailPage(context, crawledData); break;
-                default: context.log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
+                case 'LIST': await handleListPage({ $, crawler, request }); break;
+                case 'DETAIL': await handleDetailPage({ $, request }); break;
+                default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
 
-        failedRequestHandler(context, error) {
-            const { request } = context;
-            context.log.error(`Request ${request.url} failed and reached maximum retries.`, {
+        failedRequestHandler({ request }, error) {
+            log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
@@ -59,9 +58,8 @@ const createCrawler = (crawledData) => {
     });
 };
 
-async function handleListPage(context, crawledData) {
-    const { $, crawler, request } = context;
-
+// --- DEFINITIVE FIX: Removed 'log' from destructuring, as it will use the global import ---
+async function handleListPage({ $, crawler, request }) {
     const { type } = request.userData;
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
@@ -87,16 +85,16 @@ async function handleListPage(context, crawledData) {
     });
 
     if (newRequests.length > 0) {
-        context.log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
+        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        context.log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
+        // Use the correct .warning() method from the imported log
+        log.warning({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
     }
 }
 
-async function handleDetailPage(context, crawledData) {
-    const { $, request } = context;
-    
+// --- DEFINITIVE FIX: Removed 'log' from destructuring ---
+async function handleDetailPage({ $, request }, crawledData) {
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
     
@@ -106,14 +104,16 @@ async function handleDetailPage(context, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        context.log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
-        context.log.warn(`No magnet links found on detail page for "${raw_title}"`);
+        // Use the correct .warning() method from the imported log
+        log.warning(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
 const runCrawler = async () => {
     const crawledData = [];
+    // Pass the crawledData array to the createCrawler function
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     
@@ -137,6 +137,7 @@ const runCrawler = async () => {
     };
 
     if (config.isProxyEnabled) {
+        // This top-level logger is fine, as it's outside the Crawlee context
         logger.info({ ...logInfo, proxyCount: config.proxyUrls.length }, `Starting crawl using proxies.`);
     } else {
         logger.info(logInfo, `Starting direct crawl.`);
@@ -148,4 +149,4 @@ const runCrawler = async () => {
     return crawledData;
 };
 
-module.exports = { runCrawler };
+module.exports = { runCrawler };```
