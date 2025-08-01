@@ -2,9 +2,9 @@
 const { CheerioCrawler, log } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
-const logger = require('../utils/logger'); // Global Pino logger
-const fs = require('fs/promises'); // --- NEW: Import Node.js File System module ---
-const path = require('path');   // --- NEW: Import Node.js Path module ---
+const logger = require('../utils/logger'); // Global Pino logger for top-level logs
+const fs = require('fs/promises');
+const path = require('path');
 
 let proxyIndex = 0;
 
@@ -65,7 +65,10 @@ async function handleListPage({ $, crawler, request }) {
 
     $(detailLinkSelector).each((index, element) => {
         const linkEl = $(element);
-        const threadContainer = linkEl.closest('div.ipsDataItem');
+        // --- START OF DEFINITIVE FIX ---
+        // The selector now correctly looks for any element with the class '.ipsDataItem', not just a 'div'.
+        const threadContainer = linkEl.closest('.ipsDataItem');
+        // --- END OF DEFINITIVE FIX ---
 
         if (threadContainer.length > 0) {
             const url = linkEl.attr('href');
@@ -89,10 +92,9 @@ async function handleListPage({ $, crawler, request }) {
     } else {
         log.warning("No detail page links found on list page. The page structure might have changed.", { url: request.url });
         
-        // --- START OF NEW DEBUGGING FEATURE ---
         try {
             const debugDir = path.join('/data', 'debug');
-            await fs.mkdir(debugDir, { recursive: true }); // Ensure the directory exists
+            await fs.mkdir(debugDir, { recursive: true });
             const sanitizedUrl = request.url.replace(/[^a-zA-Z0-9]/g, '_');
             const filename = `${new Date().toISOString()}_${sanitizedUrl}.html`;
             const filePath = path.join(debugDir, filename);
@@ -101,7 +103,6 @@ async function handleListPage({ $, crawler, request }) {
         } catch (e) {
             log.error("Failed to save debug HTML file.", { error: e.message });
         }
-        // --- END OF NEW DEBUGGING FEATURE ---
     }
 }
 
