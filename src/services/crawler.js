@@ -3,6 +3,8 @@ const { CheerioCrawler, log } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
 const logger = require('../utils/logger'); // Global Pino logger
+const fs = require('fs/promises'); // --- NEW: Import Node.js File System module ---
+const path = require('path');   // --- NEW: Import Node.js Path module ---
 
 let proxyIndex = 0;
 
@@ -26,7 +28,6 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                // --- DEFINITIVE FIX: Correct structured logging format ---
                 log.debug("Transforming request for proxy.", { proxy: proxyUrl, target: originalUrl });
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
@@ -86,8 +87,21 @@ async function handleListPage({ $, crawler, request }) {
         log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        // --- DEFINITIVE FIX: Correct structured logging format ---
         log.warning("No detail page links found on list page. The page structure might have changed.", { url: request.url });
+        
+        // --- START OF NEW DEBUGGING FEATURE ---
+        try {
+            const debugDir = path.join('/data', 'debug');
+            await fs.mkdir(debugDir, { recursive: true }); // Ensure the directory exists
+            const sanitizedUrl = request.url.replace(/[^a-zA-Z0-9]/g, '_');
+            const filename = `${new Date().toISOString()}_${sanitizedUrl}.html`;
+            const filePath = path.join(debugDir, filename);
+            await fs.writeFile(filePath, $.html());
+            log.info(`Saved HTML of failed page to: ${filePath}`);
+        } catch (e) {
+            log.error("Failed to save debug HTML file.", { error: e.message });
+        }
+        // --- END OF NEW DEBUGGING FEATURE ---
     }
 }
 
@@ -103,7 +117,6 @@ async function handleDetailPage({ $, request }, crawledData) {
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
         log.debug("Successfully scraped detail page.", { title: raw_title, type, postedAt });
     } else {
-        // --- DEFINITIVE FIX: Correct structured logging format ---
         log.warning(`No magnet links found on detail page for "${raw_title}"`, { url: request.url });
     }
 }
