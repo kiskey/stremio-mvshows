@@ -40,7 +40,7 @@ const runFullWorkflow = async () => {
         let skippedCount = 0;
 
         for (const threadData of allScrapedThreads) {
-            const { thread_hash, raw_title, magnet_uris, type, postedAt } = threadData; // Get new fields
+            const { thread_hash, raw_title, magnet_uris, type, postedAt, catalogId } = threadData;
 
             const existingThread = await models.Thread.findOne({ where: { raw_title } });
 
@@ -74,20 +74,19 @@ const runFullWorkflow = async () => {
                         thread_hash, raw_title, clean_title: parsedTitle.clean_title, 
                         year: parsedTitle.year, tmdb_id: dbEntry.tmdb_id, 
                         status: 'linked', magnet_uris: null,
-                        type, postedAt // Save new fields
+                        type, postedAt, catalog: catalogId
                     }, { transaction: t });
 
                     const streamsToCreate = [];
                     for (const magnet_uri of magnet_uris) {
                         const streamDetails = parser.parseMagnet(magnet_uri); 
-                        if (streamDetails) { // Loosen check to allow movies without season
+                        if (streamDetails) {
                             let streamEntry = {
                                 tmdb_id: dbEntry.tmdb_id,
                                 infohash: streamDetails.infohash,
                                 quality: streamDetails.quality,
                                 language: streamDetails.language
                             };
-                            // Handle series-specific data
                             if (type === 'series' && streamDetails.season) {
                                 streamEntry.season = streamDetails.season;
                                 if (streamDetails.type === 'SEASON_PACK') {
@@ -100,8 +99,12 @@ const runFullWorkflow = async () => {
                                     streamEntry.episode = streamDetails.episode;
                                     streamEntry.episode_end = streamDetails.episode;
                                 }
+                                streamsToCreate.push(streamEntry);
+                            } else if (type === 'movie') {
+                                streamEntry.season = null;
+                                streamEntry.episode = null;
+                                streamsToCreate.push(streamEntry);
                             }
-                            streamsToCreate.push(streamEntry);
                         }
                     }
                     if (streamsToCreate.length > 0) {
@@ -114,7 +117,7 @@ const runFullWorkflow = async () => {
                         thread_hash, raw_title, clean_title: parsedTitle.clean_title,
                         year: parsedTitle.year, tmdb_id: null,
                         status: 'pending_tmdb', magnet_uris: magnet_uris,
-                        type, postedAt // Save new fields
+                        type, postedAt, catalog: catalogId
                     }, { transaction: t });
                 }
 
