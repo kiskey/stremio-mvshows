@@ -33,39 +33,47 @@ const createCrawler = (crawledData) => {
             }
         ],
 
+        // --- START OF DEFINITIVE FIX ---
+        // The context is passed as a single object.
         async requestHandler(context) {
+            // Destructure the properties you need from the context.
             const { request, log, $ } = context;
+
             if (!$ || typeof $.html !== 'function') {
                 log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
                 return;
             }
+            
             const { label } = request;
             switch (label) {
-                case 'LIST': await handleListPage(context); break;
+                case 'LIST': await handleListPage(context, crawledData); break;
                 case 'DETAIL': await handleDetailPage(context, crawledData); break;
                 default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
 
-        failedRequestHandler({ request, log}, error ) {
+        // The error is now the second parameter.
+        failedRequestHandler(context, error) {
+            const { request, log } = context;
             log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
         }
+        // --- END OF DEFINITIVE FIX ---
     });
 };
 
-// --- START OF DEFINITIVE FIX for SCRAPER ---
-async function handleListPage({ $, log, crawler, request }) {
+// The function now accepts the full context object.
+async function handleListPage(context, crawledData) {
+    const { $, log, crawler, request } = context;
+
     const { type } = request.userData;
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
-    // This is a more robust way to find each thread item
     $(detailLinkSelector).each((index, element) => {
         const linkEl = $(element);
-        // Traverse up to the parent container that holds all the info for a single thread
         const threadContainer = linkEl.closest('div.ipsDataItem');
 
         if (threadContainer.length > 0) {
@@ -83,7 +91,6 @@ async function handleListPage({ $, log, crawler, request }) {
             }
         }
     });
-    // --- END OF DEFINITIVE FIX for SCRAPER ---
 
     if (newRequests.length > 0) {
         log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
@@ -93,7 +100,10 @@ async function handleListPage({ $, log, crawler, request }) {
     }
 }
 
-async function handleDetailPage({ $, request, log }, crawledData) {
+// The function now accepts the full context object.
+async function handleDetailPage(context, crawledData) {
+    const { $, request, log } = context;
+    
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
     
@@ -103,7 +113,7 @@ async function handleDetailPage({ $, request, log }, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        logger.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
         log.warn(`No magnet links found on detail page for "${raw_title}"`);
     }
