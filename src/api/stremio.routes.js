@@ -159,6 +159,20 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
     const { infohash, episode } = req.params;
     if (!rd.isEnabled || !infohash) return res.status(404).send('Not Found');
     try {
+        // --- START OF FIX R5 ---
+        // Determine media type from database to apply correct file-selection logic.
+        const streamRecord = await models.Stream.findOne({ where: { infohash } });
+        let mediaType = 'series'; // Default to series for safety
+        if (streamRecord && streamRecord.tmdb_id) {
+            const metaRecord = await models.TmdbMetadata.findByPk(streamRecord.tmdb_id);
+            if (metaRecord) {
+                const parsedData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
+                mediaType = parsedData.media_type === 'tv' ? 'series' : 'movie';
+            }
+        }
+        logger.debug({ infohash, mediaType }, "Determined media type for RD polling.");
+        // --- END OF FIX R5 ---
+
         const rdTorrent = await models.RdTorrent.findByPk(infohash);
         if (!rdTorrent || !rdTorrent.rd_id) {
             return res.status(404).json({ error: 'Torrent not being processed.' });
@@ -184,49 +198,68 @@ router.get('/rd-poll/:infohash/:episode.json', async (req, res) => {
                     requestedEpisode: episode,
                     filesJson: JSON.stringify(torrentInfo.files),
                     linksJson: JSON.stringify(torrentInfo.links)
-                }, "Torrent downloaded. Analyzing file list for requested episode.");
+                }, "Torrent downloaded. Analyzing file list.");
 
-                let episodeFile;
+                let fileToStream;
                 let linkIndex = -1;
                 
                 const downloadableFiles = torrentInfo.files.filter(file => file.selected === 1);
 
-                logger.debug("Attempting Layer 1 & 2: PTT and Regex parsing on downloadable files...");
-                for (let i = 0; i < downloadableFiles.length; i++) {
-                    const file = downloadableFiles[i];
-                    const pttResult = ptt.parse(file.path);
-                    let foundEpisode = pttResult.episode;
-
-                    if (foundEpisode === undefined) {
-                        const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
-                        const match = file.path.match(regex);
-                        if (match) {
-                            foundEpisode = parseInt(match[2], 10);
-                        }
-                    }
-                    
-                    if (foundEpisode === parseInt(episode)) {
-                        episodeFile = file;
-                        linkIndex = i;
-                        break;
-                    }
-                }
-                
-                if (!episodeFile) {
-                    logger.warn({ infohash, episode }, "Layers 1 & 2 failed. Attempting Layer 3: Single-file heuristic...");
+                // --- START OF FIX R5 ---
+                // Apply file selection logic based on determined media type.
+                if (mediaType === 'movie') {
+                    logger.debug({ infohash }, "Applying movie-specific file selection logic (largest video file).");
                     const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
                     const videoFiles = downloadableFiles.filter(file => 
                         videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext))
                     );
 
-                    if (videoFiles.length === 1) {
-                        logger.info({ infohash, file: videoFiles[0].path }, "Heuristic successful: Found a single video file. Selecting it.");
-                        episodeFile = videoFiles[0];
-                        linkIndex = downloadableFiles.findIndex(file => file.id === episodeFile.id);
+                    if (videoFiles.length > 0) {
+                        fileToStream = videoFiles.reduce((largest, current) => current.bytes > largest.bytes ? current : largest, videoFiles[0]);
+                        linkIndex = downloadableFiles.findIndex(f => f.id === fileToStream.id);
+                        logger.info({ infohash, file: fileToStream.path }, "Movie logic successful: Selected largest video file.");
+                    } else {
+                        logger.warn({ infohash }, "Movie logic failed: No video files found in the torrent.");
+                    }
+                } else { // mediaType is 'series'
+                    logger.debug("Attempting Layer 1 & 2: PTT and Regex parsing on downloadable files for series...");
+                    for (let i = 0; i < downloadableFiles.length; i++) {
+                        const file = downloadableFiles[i];
+                        const pttResult = ptt.parse(file.path);
+                        let foundEpisode = pttResult.episode;
+
+                        if (foundEpisode === undefined) {
+                            const regex = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
+                            const match = file.path.match(regex);
+                            if (match) {
+                                foundEpisode = parseInt(match[2], 10);
+                            }
+                        }
+                        
+                        if (foundEpisode === parseInt(episode)) {
+                            fileToStream = file;
+                            linkIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    if (!fileToStream) {
+                        logger.warn({ infohash, episode }, "Layers 1 & 2 failed for series. Attempting Layer 3: Single-file heuristic...");
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv'];
+                        const videoFiles = downloadableFiles.filter(file => 
+                            videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext))
+                        );
+
+                        if (videoFiles.length === 1) {
+                            logger.info({ infohash, file: videoFiles[0].path }, "Heuristic successful: Found a single video file. Selecting it.");
+                            fileToStream = videoFiles[0];
+                            linkIndex = downloadableFiles.findIndex(file => file.id === fileToStream.id);
+                        }
                     }
                 }
+                // --- END OF FIX R5 ---
                 
-                if (episodeFile && linkIndex !== -1 && torrentInfo.links[linkIndex]) {
+                if (fileToStream && linkIndex !== -1 && torrentInfo.links[linkIndex]) {
                     const unrestricted = await rd.unrestrictLink(torrentInfo.links[linkIndex]);
                     return res.redirect(302, unrestricted.download);
                 } else {
