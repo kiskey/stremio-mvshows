@@ -65,12 +65,23 @@ async function getSeriesCatalog(req, res, skip) {
             limit: limit
         });
         const metas = allThreads.map(thread => {
-            if (thread.status === 'linked' && thread.TmdbMetadatum) {
+            if (thread.status === 'linked' && thread.TmdbMetadatum && thread.TmdbMetadatum.imdb_id) {
                 const meta = thread.TmdbMetadatum;
                 const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
-                return { id: `${config.addonId}:${meta.imdb_id}`, type: 'series', name: parsedData.title, poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null, };
+                return {
+                    id: meta.imdb_id,
+                    type: 'series',
+                    name: parsedData.title,
+                    poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
+                };
             } else if (thread.status === 'pending_tmdb') {
-                 return { id: `${config.addonId}:pending:${thread.id}`, type: 'series', name: `[PENDING] ${thread.clean_title}`, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || `This item is pending an official metadata match.` };
+                 return {
+                    id: `${config.addonId}:pending:${thread.id}`, 
+                    type: 'series',
+                    name: `[PENDING] ${thread.clean_title}`,
+                    poster: thread.custom_poster || config.placeholderPoster,
+                    description: thread.custom_description || `This item is pending an official metadata match.`
+                };
             }
             return null;
         }).filter(meta => meta);
@@ -85,7 +96,7 @@ async function getMovieCatalog(req, res, skip, catalogId) {
     const limit = 100;
     try {
         const allThreads = await models.Thread.findAll({
-            where: { type: 'movie', catalog: catalogId },
+            where: { type: 'movie', catalog: catalogId, status: 'linked' },
             include: [{ model: models.TmdbMetadata, required: true }],
             order: [['postedAt', 'DESC']],
             offset: skip,
@@ -95,7 +106,7 @@ async function getMovieCatalog(req, res, skip, catalogId) {
             const meta = thread.TmdbMetadatum;
             const parsedData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
             return {
-                id: `${config.addonId}:${meta.imdb_id}`,
+                id: meta.imdb_id,
                 type: 'movie',
                 name: parsedData.title,
                 poster: parsedData.poster_path ? `https://image.tmdb.org/t/p/w500${parsedData.poster_path}` : null,
@@ -108,8 +119,6 @@ async function getMovieCatalog(req, res, skip, catalogId) {
     }
 }
 
-// --- START OF DEFINITIVE FIX ---
-// This is the restored and enhanced /meta endpoint
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
     if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
@@ -118,81 +127,31 @@ router.get('/meta/:type/:id.json', async (req, res) => {
 
     try {
         const idParts = id.split(':');
-        const itemTypeOrImdbId = idParts[1];
+        const itemType = idParts[1];
 
-        // This block handles pending items for both movies and series
-        if (itemTypeOrImdbId === 'pending') {
+        if (itemType === 'pending') {
             const threadId = idParts[2];
             const thread = await models.Thread.findByPk(threadId);
             if (!thread || thread.status !== 'pending_tmdb') return res.status(404).json({ err: 'Pending item not found' });
-            return res.json({ meta: { id: id, type: thread.type, name: `[PENDING] ${thread.clean_title}`, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || 'Metadata is pending.', releaseInfo: thread.year ? thread.year.toString() : '' } });
-        }
-
-        // This block handles all linked items (both movies and series)
-        if (itemTypeOrImdbId.startsWith('tt')) {
-            const imdb_id = itemTypeOrImdbId;
-            const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id } });
-            if (!metaRecord) return res.status(404).json({ err: 'Metadata not found in local database.' });
-
-            const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
-            const metaObject = {
-                id: id,
-                type: tmdbData.media_type,
-                name: tmdbData.title,
-                poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
-                background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
-                description: tmdbData.overview,
-                releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
-                year: metaRecord.year
-            };
-
-            // If the content is a series, we build the episode list (the 'videos' array)
-            if (tmdbData.media_type === 'series') {
-                const streams = await models.Stream.findAll({
-                    where: { tmdb_id: metaRecord.tmdb_id },
-                    attributes: ['season', 'episode', 'episode_end'],
-                    order: [['season', 'ASC'], ['episode', 'ASC']],
-                    raw: true,
-                });
-                const uniqueSeasonNumbers = [...new Set(streams.map(s => s.season))];
-                const episodeDataPromises = uniqueSeasonNumbers.map(seasonNum => getTmdbEpisodeData(metaRecord.tmdb_id, seasonNum));
-                const seasonsData = await Promise.all(episodeDataPromises);
-                const episodeDataMap = new Map();
-                seasonsData.flat().forEach(ep => episodeDataMap.set(`s${ep.season_number}e${ep.episode_number}`, ep));
-
-                const videos = [];
-                const uniqueEpisodes = new Set();
-                for (const s of streams) {
-                    const episodeStart = s.episode;
-                    const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
-                    for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
-                        const uniqueKey = `s${s.season}e${epNum}`;
-                        if (uniqueEpisodes.has(uniqueKey)) continue;
-                        const richEpisodeData = episodeDataMap.get(uniqueKey);
-                        videos.push({
-                            season: s.season, episode: epNum, id: `${id}:${s.season}:${epNum}`,
-                            title: richEpisodeData?.name || `Episode ${epNum}`,
-                            released: richEpisodeData?.air_date ? new Date(richEpisodeData.air_date).toISOString() : new Date(metaRecord.year, s.season - 1, epNum).toISOString(),
-                            thumbnail: richEpisodeData?.still_path ? `https://image.tmdb.org/t/p/w500${richEpisodeData.still_path}` : null,
-                            overview: richEpisodeData?.overview || null,
-                        });
-                        uniqueEpisodes.add(uniqueKey);
-                    }
-                }
-                metaObject.videos = videos;
-            }
-            // For movies, the 'videos' array is simply omitted, which is the correct behavior.
-
-            return res.json({ meta: metaObject });
+            
+            return res.json({ 
+                meta: { 
+                    id: id, 
+                    type: thread.type, 
+                    name: `[PENDING] ${thread.clean_title}`, 
+                    poster: thread.custom_poster || config.placeholderPoster, 
+                    description: thread.custom_description || 'Metadata is pending.', 
+                    releaseInfo: thread.year ? thread.year.toString() : '' 
+                } 
+            });
         }
         
-        return res.status(404).json({ err: 'Invalid ID format' });
+        return res.status(404).json({ err: 'This addon only provides metadata for pending items.' });
     } catch (error) {
         logger.error(error, `Failed to fetch meta for ID: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
-// --- END OF DEFINITIVE FIX ---
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -401,8 +360,10 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     }
                 }
             } else if (itemTypeOrImdbId.startsWith('tt')) {
+                // This case should not be hit if catalogs are correct, but is safe to keep.
                 imdb_id = itemTypeOrImdbId;
-                if (type === 'series' && idParts.length >= 4) {
+                if (type === 'series') {
+                    if (idParts.length < 4) return res.json({ streams: [] }); // This ID format is for specific episodes
                     season = idParts[2];
                     episode = idParts[3];
                 }
@@ -410,7 +371,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
         } else if (requestedId.startsWith('tt')) {
             const idParts = requestedId.split(':');
             imdb_id = idParts[0];
-            if (type === 'series' && idParts.length >= 3) {
+            if (type === 'series') {
+                if (idParts.length < 3) return res.json({ streams: [] }); // This ID format is for specific episodes
                 season = idParts[1];
                 episode = idParts[2];
             }
@@ -421,12 +383,10 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             if (!meta) return res.json({ streams: [] });
 
             const whereClause = { tmdb_id: meta.tmdb_id };
-            if (type === 'series') {
-                if (season && episode) { // Request is for a specific episode
-                    whereClause.season = season;
-                    whereClause.episode = { [Op.lte]: episode };
-                    whereClause.episode_end = { [Op.gte]: episode };
-                }
+            if (type === 'series' && season && episode) {
+                whereClause.season = season;
+                whereClause.episode = { [Op.lte]: episode };
+                whereClause.episode_end = { [Op.gte]: episode };
             } else if (type === 'movie') {
                 whereClause.season = null;
                 whereClause.episode = null;
