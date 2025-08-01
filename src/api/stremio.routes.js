@@ -110,6 +110,7 @@ async function getMovieCatalog(req, res, skip, catalogId) {
 
 router.get('/meta/:type/:id.json', async (req, res) => {
     const { type, id } = req.params;
+    // This first check is now simpler and more correct.
     if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
         return res.status(404).json({ err: 'Not Found' });
     }
@@ -118,67 +119,31 @@ router.get('/meta/:type/:id.json', async (req, res) => {
         const idParts = id.split(':');
         const itemTypeOrImdbId = idParts[1];
 
+        // --- START OF DEFINITIVE FIX ---
+        // This endpoint will ONLY handle 'pending' items.
         if (itemTypeOrImdbId === 'pending') {
             const threadId = idParts[2];
             const thread = await models.Thread.findByPk(threadId);
             if (!thread || thread.status !== 'pending_tmdb') return res.status(404).json({ err: 'Pending item not found' });
-            return res.json({ meta: { id: id, type: thread.type, name: thread.clean_title, poster: thread.custom_poster || config.placeholderPoster, description: thread.custom_description || 'Metadata is pending.', releaseInfo: thread.year ? thread.year.toString() : '' } });
+            
+            // Return the meta object for the pending item.
+            return res.json({ 
+                meta: { 
+                    id: id, 
+                    type: thread.type, 
+                    name: `[PENDING] ${thread.clean_title}`, 
+                    poster: thread.custom_poster || config.placeholderPoster, 
+                    description: thread.custom_description || 'Metadata is pending.', 
+                    releaseInfo: thread.year ? thread.year.toString() : '' 
+                } 
+            });
         }
 
-        if (itemTypeOrImdbId.startsWith('tt')) {
-            const imdb_id = itemTypeOrImdbId;
-            const metaRecord = await models.TmdbMetadata.findOne({ where: { imdb_id: imdb_id } });
-            if (!metaRecord) return res.status(404).json({ err: 'Metadata not found in local database.' });
-
-            const tmdbData = (typeof metaRecord.data === 'string') ? JSON.parse(metaRecord.data) : metaRecord.data;
-            const metaObject = {
-                id: id, type: tmdbData.media_type, name: tmdbData.title,
-                poster: tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : null,
-                background: tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/original${tmdbData.backdrop_path}` : null,
-                description: tmdbData.overview,
-                releaseInfo: metaRecord.year ? metaRecord.year.toString() : '',
-                year: metaRecord.year
-            };
-
-            if (tmdbData.media_type === 'series') {
-                const streams = await models.Stream.findAll({
-                    where: { tmdb_id: metaRecord.tmdb_id },
-                    attributes: ['season', 'episode', 'episode_end'],
-                    order: [['season', 'ASC'], ['episode', 'ASC']],
-                    raw: true,
-                });
-                const uniqueSeasonNumbers = [...new Set(streams.map(s => s.season))];
-                const episodeDataPromises = uniqueSeasonNumbers.map(seasonNum => getTmdbEpisodeData(metaRecord.tmdb_id, seasonNum));
-                const seasonsData = await Promise.all(episodeDataPromises);
-                const episodeDataMap = new Map();
-                seasonsData.flat().forEach(ep => episodeDataMap.set(`s${ep.season_number}e${ep.episode_number}`, ep));
-
-                const videos = [];
-                const uniqueEpisodes = new Set();
-                for (const s of streams) {
-                    const episodeStart = s.episode;
-                    const episodeEnd = (s.episode_end && s.episode_end > episodeStart) ? s.episode_end : episodeStart;
-                    for (let epNum = episodeStart; epNum <= episodeEnd; epNum++) {
-                        const uniqueKey = `s${s.season}e${epNum}`;
-                        if (uniqueEpisodes.has(uniqueKey)) continue;
-                        const richEpisodeData = episodeDataMap.get(uniqueKey);
-                        videos.push({
-                            season: s.season, episode: epNum, id: `${id}:${s.season}:${epNum}`,
-                            title: richEpisodeData?.name || `Episode ${epNum}`,
-                            released: richEpisodeData?.air_date ? new Date(richEpisodeData.air_date).toISOString() : new Date(metaRecord.year, s.season - 1, epNum).toISOString(),
-                            thumbnail: richEpisodeData?.still_path ? `https://image.tmdb.org/t/p/w500${richEpisodeData.still_path}` : null,
-                            overview: richEpisodeData?.overview || null,
-                        });
-                        uniqueEpisodes.add(uniqueKey);
-                    }
-                }
-                metaObject.videos = videos;
-            }
-
-            return res.json({ meta: metaObject });
-        }
+        // For any other request to our addon with our prefix (e.g., ...:tt...),
+        // we explicitly do NOT respond. This allows Cinemata to take over.
+        return res.status(404).json({ err: 'Not a pending item.' });
+        // --- END OF DEFINITIVE FIX ---
         
-        return res.status(404).json({ err: 'Invalid ID format' });
     } catch (error) {
         logger.error(error, `Failed to fetch meta for ID: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
