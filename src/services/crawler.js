@@ -55,15 +55,13 @@ const createCrawler = (crawledData) => {
 };
 
 async function handleListPage({ $, crawler, request }) {
-    const { type, catalogId } = request.userData; // Get catalogId
+    const { type, catalogId } = request.userData;
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
     $(detailLinkSelector).each((index, element) => {
         const linkEl = $(element);
-        // --- START OF DEFINITIVE FIX for SCRAPER ---
         const threadContainer = linkEl.closest('.ipsDataItem');
-        // --- END OF DEFINITIVE FIX for SCRAPER ---
 
         if (threadContainer.length > 0) {
             const url = linkEl.attr('href');
@@ -75,7 +73,7 @@ async function handleListPage({ $, crawler, request }) {
                 newRequests.push({ 
                     url, 
                     label: 'DETAIL', 
-                    userData: { raw_title, type, postedAt, catalogId } // Pass catalogId
+                    userData: { raw_title, type, postedAt, catalogId }
                 });
             }
         }
@@ -102,14 +100,14 @@ async function handleListPage({ $, crawler, request }) {
 
 async function handleDetailPage({ $, request }, crawledData) {
     const { userData } = request;
-    const { raw_title, type, postedAt, catalogId } = userData; // Receive catalogId
+    const { raw_title, type, postedAt, catalogId } = userData;
     
     const magnetSelector = 'a[href^="magnet:?"]';
     const magnet_uris = $(magnetSelector).map((i, el) => $(el).attr('href')).get();
 
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
-        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt, catalogId }); // Add catalogId
+        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt, catalogId });
         log.debug("Successfully scraped detail page.", { title: raw_title, type, catalogId });
     } else {
         log.warning(`No magnet links found on detail page for "${raw_title}"`, { url: request.url });
@@ -121,12 +119,12 @@ const runCrawler = async () => {
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     
-    const addScrapeTasks = (urls, type, catalogId) => { // Accept catalogId
+    const addScrapeTasks = (urls, type, catalogId) => {
         urls.forEach(baseUrl => {
             const cleanBaseUrl = baseUrl.replace(/\/$/, '');
             for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
                 let url = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
-                startRequests.push({ url, label: 'LIST', userData: { type, catalogId } }); // Pass catalogId
+                startRequests.push({ url, label: 'LIST', userData: { type, catalogId } });
             }
         });
     };
