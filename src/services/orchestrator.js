@@ -79,7 +79,7 @@ const runFullWorkflow = async () => {
 
                     const streamsToCreate = [];
                     for (const magnet_uri of magnet_uris) {
-                        const streamDetails = parser.parseMagnet(magnet_uri); 
+                        const streamDetails = parser.parseMagnet(magnet_uri, type); 
                         if (streamDetails) {
                             let streamEntry = {
                                 tmdb_id: dbEntry.tmdb_id,
