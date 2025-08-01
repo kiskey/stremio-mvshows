@@ -20,36 +20,38 @@ const createCrawler = (crawledData) => {
 
         preNavigationHooks: [
             (crawlingContext, gotOptions) => {
-                const { log } = crawlingContext; // Correctly get the logger
                 gotOptions.headers = { ...gotOptions.headers, 'User-Agent': config.scraperUserAgent };
                 gotOptions.timeout = { request: config.scraperTimeoutSecs * 1000 };
                 if (!config.isProxyEnabled) { return; }
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
+                crawlingContext.log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
                 gotOptions.json = { pageURL: originalUrl };
             }
         ],
 
-        async requestHandler({ request, log, $, crawler }) {
+        async requestHandler(context) {
+            const { request, $ } = context;
+
             if (!$ || typeof $.html !== 'function') {
-                log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: request.response?.headers['content-type'] });
+                context.log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
                 return;
             }
             
             const { label } = request;
             switch (label) {
-                case 'LIST': await handleListPage({ log, $, crawler, request }, crawledData); break;
-                case 'DETAIL': await handleDetailPage({ log, $, request }, crawledData); break;
-                default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
+                case 'LIST': await handleListPage(context, crawledData); break;
+                case 'DETAIL': await handleDetailPage(context, crawledData); break;
+                default: context.log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
 
-        failedRequestHandler({ request, log }, error) {
-            log.error(`Request ${request.url} failed and reached maximum retries.`, {
+        failedRequestHandler(context, error) {
+            const { request } = context;
+            context.log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
@@ -57,7 +59,9 @@ const createCrawler = (crawledData) => {
     });
 };
 
-async function handleListPage({ log, $, crawler, request }, crawledData) {
+async function handleListPage(context, crawledData) {
+    const { $, crawler, request } = context;
+
     const { type } = request.userData;
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
@@ -83,17 +87,16 @@ async function handleListPage({ log, $, crawler, request }, crawledData) {
     });
 
     if (newRequests.length > 0) {
-        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
+        context.log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        // --- START OF DEFINITIVE FIX ---
-        // Use the correct .warning() method
-        log.warning({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
-        // --- END OF DEFINITIVE FIX ---
+        context.log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
     }
 }
 
-async function handleDetailPage({ log, $, request }, crawledData) {
+async function handleDetailPage(context, crawledData) {
+    const { $, request } = context;
+    
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
     
@@ -103,12 +106,9 @@ async function handleDetailPage({ log, $, request }, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        context.log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
-        // --- START OF DEFINITIVE FIX ---
-        // Use the correct .warning() method
-        log.warning(`No magnet links found on detail page for "${raw_title}"`);
-        // --- END OF DEFINITIVE FIX ---
+        context.log.warn(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
