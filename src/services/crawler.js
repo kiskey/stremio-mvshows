@@ -18,8 +18,6 @@ const createCrawler = (crawledData) => {
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
 
-        // --- START OF DEFINITIVE FIX ---
-        // Accessing the logger via the crawler instance on the context.
         preNavigationHooks: [
             (crawlingContext, gotOptions) => {
                 gotOptions.headers = { ...gotOptions.headers, 'User-Agent': config.scraperUserAgent };
@@ -28,7 +26,6 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                // CORRECT USAGE: crawlingContext.log is the logger instance
                 crawlingContext.log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
@@ -36,25 +33,26 @@ const createCrawler = (crawledData) => {
             }
         ],
 
-        async requestHandler(context) {
-            const { request, $ } = context;
-
+        // --- START OF DEFINITIVE FIX ---
+        // Destructure the context object directly in the handler's signature.
+        async requestHandler({ request, log, $, crawler }) {
             if (!$ || typeof $.html !== 'function') {
-                context.log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
+                log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: request.response?.headers['content-type'] });
                 return;
             }
             
             const { label } = request;
             switch (label) {
-                case 'LIST': await handleListPage(context, crawledData); break;
-                case 'DETAIL': await handleDetailPage(context, crawledData); break;
-                default: context.log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
+                // Pass the destructured context properties to the helper functions.
+                case 'LIST': await handleListPage({ log, $, crawler, request }, crawledData); break;
+                case 'DETAIL': await handleDetailPage({ log, $, request }, crawledData); break;
+                default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
 
-        failedRequestHandler(context, error) {
-            const { request } = context;
-            context.log.error(`Request ${request.url} failed and reached maximum retries.`, {
+        // Correctly destructure the context and use the second parameter for the error.
+        failedRequestHandler({ request, log }, error) {
+            log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
@@ -63,9 +61,9 @@ const createCrawler = (crawledData) => {
     });
 };
 
-async function handleListPage(context, crawledData) {
-    const { $, crawler, request } = context;
-
+// --- START OF DEFINITIVE FIX ---
+// The function now accepts the destructured context properties.
+async function handleListPage({ log, $, crawler, request }, crawledData) {
     const { type } = request.userData;
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
@@ -91,16 +89,17 @@ async function handleListPage(context, crawledData) {
     });
 
     if (newRequests.length > 0) {
-        context.log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
+        // CORRECT USAGE: `log` is now the logger instance.
+        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        context.log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
+        // CORRECT USAGE: `log` is now the logger instance.
+        log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
     }
 }
 
-async function handleDetailPage(context, crawledData) {
-    const { $, request } = context;
-    
+// The function now accepts the destructured context properties.
+async function handleDetailPage({ log, $, request }, crawledData) {
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
     
@@ -110,11 +109,12 @@ async function handleDetailPage(context, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        context.log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
-        context.log.warn(`No magnet links found on detail page for "${raw_title}"`);
+        log.warn(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
+// --- END OF DEFINITIVE FIX ---
 
 const runCrawler = async () => {
     const crawledData = [];
