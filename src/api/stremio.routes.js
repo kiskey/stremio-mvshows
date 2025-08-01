@@ -48,7 +48,7 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return getSeriesCatalog(req, res, skip);
     }
     if (type === 'movie' && (id === 'tamil-hd-movies' || id === 'tamil-dubbed-movies')) {
-        return getMovieCatalog(req, res, skip);
+        return getMovieCatalog(req, res, skip, id);
     }
     
     return res.status(404).json({ err: 'Not Found' });
@@ -81,11 +81,11 @@ async function getSeriesCatalog(req, res, skip) {
     }
 }
 
-async function getMovieCatalog(req, res, skip) {
+async function getMovieCatalog(req, res, skip, catalogId) {
     const limit = 100;
     try {
         const allThreads = await models.Thread.findAll({
-            where: { type: 'movie' },
+            where: { type: 'movie', catalog: catalogId },
             include: [{ model: models.TmdbMetadata, required: true }],
             order: [['postedAt', 'DESC']],
             offset: skip,
@@ -434,10 +434,8 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         else titleDetail = `Episodes ${String(stream.episode).padStart(2, '0')}-${String(stream.episode_end).padStart(2, '0')}`;
                         titleDetail = `S${seasonStr} | ${titleDetail}`;
                     } else {
-                        const metaData = await models.TmdbMetadata.findOne({where: {tmdb_id: stream.tmdb_id}, raw: true});
-                        if(metaData) {
-                            titleDetail = JSON.parse(metaData.data).title;
-                        }
+                        const tmdbData = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
+                        titleDetail = tmdbData.title;
                     }
 
                     const rdTorrent = await models.RdTorrent.findByPk(stream.infohash);
@@ -453,7 +451,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                                 fileToStream = videoFiles.reduce((largest, current) => current.bytes > largest.bytes ? current : largest, videoFiles[0]);
                                 linkIndex = downloadableFiles.findIndex(f => f.id === fileToStream.id);
                             }
-                        } else {
+                        } else { // Series logic
                             for (let i = 0; i < downloadableFiles.length; i++) {
                                 const file = downloadableFiles[i];
                                 let foundEpisode;
