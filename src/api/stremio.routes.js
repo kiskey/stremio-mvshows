@@ -38,7 +38,6 @@ router.get('/manifest.json', (req, res) => {
 });
 
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
-    res.set('Cache-Control', 'no-store');
     const { type, id } = req.params;
     let skip = 0;
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
@@ -360,11 +359,20 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         }
                     }
                 }
+            } else if (itemTypeOrImdbId.startsWith('tt')) {
+                // This case should not be hit if catalogs are correct, but is safe to keep.
+                imdb_id = itemTypeOrImdbId;
+                if (type === 'series') {
+                    if (idParts.length < 4) return res.json({ streams: [] }); // This ID format is for specific episodes
+                    season = idParts[2];
+                    episode = idParts[3];
+                }
             }
         } else if (requestedId.startsWith('tt')) {
             const idParts = requestedId.split(':');
             imdb_id = idParts[0];
             if (type === 'series') {
+                if (idParts.length < 3) return res.json({ streams: [] }); // This ID format is for specific episodes
                 season = idParts[1];
                 episode = idParts[2];
             }
@@ -382,10 +390,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
             } else if (type === 'movie') {
                 whereClause.season = null;
                 whereClause.episode = null;
-            } else if (type === 'series') {
-                // This is a root series request, so no extra conditions are needed
-            } else {
-                return res.json({ streams: [] }); // Invalid combo
             }
             const dbStreams = await models.Stream.findAll({ where: whereClause });
 
@@ -410,7 +414,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                         const downloadableFiles = rdTorrent.files.filter(file => file.selected === 1);
 
                         if (type === 'movie') {
-                          logger.debug({ infohash: stream.infohash }, "Attempting movie file heuristic...");
                             const videoExtensions = ['.mkv', '.mp4', '.avi'];
                             const videoFiles = downloadableFiles.filter(file => videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext)));
                             if (videoFiles.length > 0) {
@@ -418,7 +421,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                                 linkIndex = downloadableFiles.findIndex(f => f.id === fileToStream.id);
                             }
                         } else {
-                          logger.debug({ infohash: stream.infohash }, "Attempting series file heuristic...");
                             for (let i = 0; i < downloadableFiles.length; i++) {
                                 const file = downloadableFiles[i];
                                 let foundEpisode;
