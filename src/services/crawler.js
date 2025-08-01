@@ -1,9 +1,8 @@
 // src/services/crawler.js
-const { CheerioCrawler, log } = require('crawlee'); // --- DEFINITIVE FIX: Import log directly from crawlee ---
+const { CheerioCrawler, log } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
-// The global pino logger is still used for top-level logs outside the crawler context.
-const logger = require('../utils/logger');
+const logger = require('../utils/logger'); // Global Pino logger
 
 let proxyIndex = 0;
 
@@ -27,8 +26,8 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                // --- DEFINITIVE FIX: Use the imported log instance ---
-                log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
+                // --- DEFINITIVE FIX: Correct structured logging format ---
+                log.debug("Transforming request for proxy.", { proxy: proxyUrl, target: originalUrl });
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
                 gotOptions.json = { pageURL: originalUrl };
@@ -44,7 +43,7 @@ const createCrawler = (crawledData) => {
             const { label } = request;
             switch (label) {
                 case 'LIST': await handleListPage({ $, crawler, request }); break;
-                case 'DETAIL': await handleDetailPage({ $, request }); break;
+                case 'DETAIL': await handleDetailPage({ $, request }, crawledData); break;
                 default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
@@ -58,7 +57,6 @@ const createCrawler = (crawledData) => {
     });
 };
 
-// --- DEFINITIVE FIX: Removed 'log' from destructuring, as it will use the global import ---
 async function handleListPage({ $, crawler, request }) {
     const { type } = request.userData;
     const newRequests = [];
@@ -88,12 +86,11 @@ async function handleListPage({ $, crawler, request }) {
         log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        // Use the correct .warning() method from the imported log
-        log.warning({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
+        // --- DEFINITIVE FIX: Correct structured logging format ---
+        log.warning("No detail page links found on list page. The page structure might have changed.", { url: request.url });
     }
 }
 
-// --- DEFINITIVE FIX: Removed 'log' from destructuring ---
 async function handleDetailPage({ $, request }, crawledData) {
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
@@ -104,16 +101,15 @@ async function handleDetailPage({ $, request }, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        log.debug("Successfully scraped detail page.", { title: raw_title, type, postedAt });
     } else {
-        // Use the correct .warning() method from the imported log
-        log.warning(`No magnet links found on detail page for "${raw_title}"`);
+        // --- DEFINITIVE FIX: Correct structured logging format ---
+        log.warning(`No magnet links found on detail page for "${raw_title}"`, { url: request.url });
     }
 }
 
 const runCrawler = async () => {
     const crawledData = [];
-    // Pass the crawledData array to the createCrawler function
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     
@@ -137,7 +133,6 @@ const runCrawler = async () => {
     };
 
     if (config.isProxyEnabled) {
-        // This top-level logger is fine, as it's outside the Crawlee context
         logger.info({ ...logInfo, proxyCount: config.proxyUrls.length }, `Starting crawl using proxies.`);
     } else {
         logger.info(logInfo, `Starting direct crawl.`);
