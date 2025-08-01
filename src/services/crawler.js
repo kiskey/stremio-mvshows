@@ -149,4 +149,4 @@ const runCrawler = async () => {
     return crawledData;
 };
 
-module.exports = { runCrawler };```
+module.exports = { runCrawler };
