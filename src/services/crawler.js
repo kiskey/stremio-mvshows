@@ -18,6 +18,8 @@ const createCrawler = (crawledData) => {
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
 
+        // --- START OF DEFINITIVE FIX ---
+        // Accessing the logger via the crawler instance on the context.
         preNavigationHooks: [
             (crawlingContext, gotOptions) => {
                 gotOptions.headers = { ...gotOptions.headers, 'User-Agent': config.scraperUserAgent };
@@ -26,6 +28,7 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
+                // CORRECT USAGE: crawlingContext.log is the logger instance
                 crawlingContext.log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
@@ -56,6 +59,7 @@ const createCrawler = (crawledData) => {
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
         }
+        // --- END OF DEFINITIVE FIX ---
     });
 };
 
