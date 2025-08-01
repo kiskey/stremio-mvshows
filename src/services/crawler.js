@@ -26,21 +26,18 @@ const createCrawler = (crawledData) => {
                 const originalUrl = crawlingContext.request.url;
                 const proxyUrl = config.proxyUrls[proxyIndex % config.proxyUrls.length];
                 proxyIndex++;
-                logger.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
+                crawlingContext.log.debug({ proxy: proxyUrl, target: originalUrl }, "Transforming request for proxy.");
                 gotOptions.url = proxyUrl;
                 gotOptions.method = 'POST';
                 gotOptions.json = { pageURL: originalUrl };
             }
         ],
 
-        // --- START OF DEFINITIVE FIX ---
-        // The context is passed as a single object.
         async requestHandler(context) {
-            // Destructure the properties you need from the context.
-            const { request, log, $ } = context;
+            const { request, $ } = context;
 
             if (!$ || typeof $.html !== 'function') {
-                log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
+                context.log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: context.response?.headers['content-type'] });
                 return;
             }
             
@@ -48,25 +45,22 @@ const createCrawler = (crawledData) => {
             switch (label) {
                 case 'LIST': await handleListPage(context, crawledData); break;
                 case 'DETAIL': await handleDetailPage(context, crawledData); break;
-                default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
+                default: context.log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
 
-        // The error is now the second parameter.
         failedRequestHandler(context, error) {
-            const { request, log } = context;
-            log.error(`Request ${request.url} failed and reached maximum retries.`, {
+            const { request } = context;
+            context.log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
                 statusCode: error.response?.statusCode, responseBodySnippet: error.response?.body?.toString().substring(0, 200),
             });
         }
-        // --- END OF DEFINITIVE FIX ---
     });
 };
 
-// The function now accepts the full context object.
 async function handleListPage(context, crawledData) {
-    const { $, log, crawler, request } = context;
+    const { $, crawler, request } = context;
 
     const { type } = request.userData;
     const newRequests = [];
@@ -93,16 +87,15 @@ async function handleListPage(context, crawledData) {
     });
 
     if (newRequests.length > 0) {
-        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
+        context.log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
         await crawler.addRequests(newRequests);
     } else {
-        log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
+        context.log.warn({ url: request.url }, "No detail page links found on list page. The page structure might have changed.");
     }
 }
 
-// The function now accepts the full context object.
 async function handleDetailPage(context, crawledData) {
-    const { $, request, log } = context;
+    const { $, request } = context;
     
     const { userData } = request;
     const { raw_title, type, postedAt } = userData;
@@ -113,9 +106,9 @@ async function handleDetailPage(context, crawledData) {
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
         crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
+        context.log.debug({ title: raw_title, type, postedAt }, "Successfully scraped detail page.");
     } else {
-        log.warn(`No magnet links found on detail page for "${raw_title}"`);
+        context.log.warn(`No magnet links found on detail page for "${raw_title}"`);
     }
 }
 
