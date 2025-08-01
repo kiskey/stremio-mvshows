@@ -2,7 +2,7 @@
 const { CheerioCrawler, log } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
-const logger = require('../utils/logger'); // Global Pino logger for top-level logs
+const logger = require('../utils/logger');
 const fs = require('fs/promises');
 const path = require('path');
 
@@ -19,7 +19,6 @@ const createCrawler = (crawledData) => {
         navigationTimeoutSecs: config.scraperTimeoutSecs,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
-
         preNavigationHooks: [
             (crawlingContext, gotOptions) => {
                 gotOptions.headers = { ...gotOptions.headers, 'User-Agent': config.scraperUserAgent };
@@ -34,13 +33,11 @@ const createCrawler = (crawledData) => {
                 gotOptions.json = { pageURL: originalUrl };
             }
         ],
-
         async requestHandler({ request, $, crawler, response }) {
             if (!$ || typeof $.html !== 'function') {
                 log.error(`Request for ${request.url} did not return valid HTML.`, { contentType: response?.headers['content-type'] });
                 return;
             }
-            
             const { label } = request;
             switch (label) {
                 case 'LIST': await handleListPage({ $, crawler, request }); break;
@@ -48,7 +45,6 @@ const createCrawler = (crawledData) => {
                 default: log.error(`Unhandled request label '${label}' for URL: ${request.url}`);
             }
         },
-
         failedRequestHandler({ request }, error) {
             log.error(`Request ${request.url} failed and reached maximum retries.`, {
                 url: request.url, retryCount: request.retryCount, error: error.message,
@@ -59,16 +55,15 @@ const createCrawler = (crawledData) => {
 };
 
 async function handleListPage({ $, crawler, request }) {
-    const { type } = request.userData;
+    const { type, catalogId } = request.userData; // Get catalogId
     const newRequests = [];
     const detailLinkSelector = 'h4.ipsDataItem_title > span.ipsType_break > a';
 
     $(detailLinkSelector).each((index, element) => {
         const linkEl = $(element);
-        // --- START OF DEFINITIVE FIX ---
-        // The selector now correctly looks for any element with the class '.ipsDataItem', not just a 'div'.
+        // --- START OF DEFINITIVE FIX for SCRAPER ---
         const threadContainer = linkEl.closest('.ipsDataItem');
-        // --- END OF DEFINITIVE FIX ---
+        // --- END OF DEFINITIVE FIX for SCRAPER ---
 
         if (threadContainer.length > 0) {
             const url = linkEl.attr('href');
@@ -80,18 +75,17 @@ async function handleListPage({ $, crawler, request }) {
                 newRequests.push({ 
                     url, 
                     label: 'DETAIL', 
-                    userData: { raw_title, type, postedAt }
+                    userData: { raw_title, type, postedAt, catalogId } // Pass catalogId
                 });
             }
         }
     });
 
     if (newRequests.length > 0) {
-        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from list page.`);
+        log.info(`Enqueuing ${newRequests.length} detail pages of type '${type}' from catalog '${catalogId}'.`);
         await crawler.addRequests(newRequests);
     } else {
         log.warning("No detail page links found on list page. The page structure might have changed.", { url: request.url });
-        
         try {
             const debugDir = path.join('/data', 'debug');
             await fs.mkdir(debugDir, { recursive: true });
@@ -108,15 +102,15 @@ async function handleListPage({ $, crawler, request }) {
 
 async function handleDetailPage({ $, request }, crawledData) {
     const { userData } = request;
-    const { raw_title, type, postedAt } = userData;
+    const { raw_title, type, postedAt, catalogId } = userData; // Receive catalogId
     
     const magnetSelector = 'a[href^="magnet:?"]';
     const magnet_uris = $(magnetSelector).map((i, el) => $(el).attr('href')).get();
 
     if (magnet_uris.length > 0) {
         const thread_hash = generateThreadHash(raw_title, magnet_uris);
-        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt });
-        log.debug("Successfully scraped detail page.", { title: raw_title, type, postedAt });
+        crawledData.push({ thread_hash, raw_title, magnet_uris, type, postedAt, catalogId }); // Add catalogId
+        log.debug("Successfully scraped detail page.", { title: raw_title, type, catalogId });
     } else {
         log.warning(`No magnet links found on detail page for "${raw_title}"`, { url: request.url });
     }
@@ -127,19 +121,19 @@ const runCrawler = async () => {
     const crawler = createCrawler(crawledData);
     const startRequests = [];
     
-    const addScrapeTasks = (urls, type) => {
+    const addScrapeTasks = (urls, type, catalogId) => { // Accept catalogId
         urls.forEach(baseUrl => {
             const cleanBaseUrl = baseUrl.replace(/\/$/, '');
             for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
                 let url = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
-                startRequests.push({ url, label: 'LIST', userData: { type } });
+                startRequests.push({ url, label: 'LIST', userData: { type, catalogId } }); // Pass catalogId
             }
         });
     };
 
-    addScrapeTasks(config.seriesForumUrls, 'series');
-    addScrapeTasks(config.movieForumUrls, 'movie');
-    addScrapeTasks(config.dubbedMovieForumUrls, 'movie');
+    addScrapeTasks(config.seriesForumUrls, 'series', 'top-series-from-forum');
+    addScrapeTasks(config.movieForumUrls, 'movie', 'tamil-hd-movies');
+    addScrapeTasks(config.dubbedMovieForumUrls, 'movie', 'tamil-dubbed-movies');
 
     const logInfo = {
         totalRequests: startRequests.length,
