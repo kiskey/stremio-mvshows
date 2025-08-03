@@ -15,6 +15,8 @@
         button:hover { background-color: #0056b3; }
         button.secondary { background-color: #6c757d; }
         button.secondary:hover { background-color: #5a6268; }
+        button.warning { background-color: #ffc107; color: black; }
+        button.warning:hover { background-color: #e0a800; }
         #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
         #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
         #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
@@ -23,6 +25,7 @@
         th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
+        hr { margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -63,7 +66,7 @@
                     <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
                     
                     <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-                    <hr style="margin: 20px 0;">
+                    <hr>
 
                     <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
                     <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
@@ -72,6 +75,24 @@
                 </form>
             </div>
         </div>
+
+        <!-- --- START OF FIX R10 --- -->
+        <!-- Correction Section -->
+        <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
+        <div class="card">
+            <form id="correction-form">
+                <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
+                
+                <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
+                <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567 (the wrong movie)">
+
+                <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
+                <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
+                
+                <button type="button" id="correct-link-btn" class="warning">Correct Link</button>
+            </form>
+        </div>
+        <!-- --- END OF FIX R10 --- -->
 
         <!-- Failures Section -->
         <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
@@ -101,6 +122,12 @@ document.addEventListener('DOMContentLoaded', () => {
         manualIdInput: document.getElementById('manual-id'),
         updatePendingBtn: document.getElementById('update-pending-btn'),
         linkOfficialBtn: document.getElementById('link-official-btn'),
+        // --- START OF FIX R10 ---
+        correctionForm: document.getElementById('correction-form'),
+        currentImdbIdInput: document.getElementById('current-imdb-id'),
+        correctIdInput: document.getElementById('correct-id'),
+        correctLinkBtn: document.getElementById('correct-link-btn'),
+        // --- END OF FIX R10 ---
     };
     let currentPendingData = [];
 
@@ -179,7 +206,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const thread = currentPendingData.find(t => t.id === threadId);
         if (!thread) return;
 
-        // Highlight selected item
         document.querySelectorAll('#pending-list li').forEach(li => {
             li.classList.toggle('selected', li.dataset.threadId == threadId);
         });
@@ -188,7 +214,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ui.threadIdInput.value = thread.id;
         ui.customPosterInput.value = thread.custom_poster || '';
         ui.customDescriptionInput.value = thread.custom_description || '';
-        ui.manualIdInput.value = ''; // Clear this field on new selection
+        ui.manualIdInput.value = '';
     }
 
     ui.triggerCrawlBtn.onclick = async () => {
@@ -224,6 +250,23 @@ document.addEventListener('DOMContentLoaded', () => {
             loadAllData();
         }
     };
+
+    // --- START OF FIX R10 ---
+    ui.correctLinkBtn.onclick = async () => {
+        const currentImdbId = ui.currentImdbIdInput.value;
+        const correctId = ui.correctIdInput.value;
+        if (!currentImdbId || !correctId) {
+            alert('Please fill in both the current incorrect ID and the new correct ID.');
+            return;
+        }
+        const success = await postData('/correct-link', { currentImdbId, correctId });
+        if (success) {
+            ui.currentImdbIdInput.value = '';
+            ui.correctIdInput.value = '';
+            loadAllData();
+        }
+    };
+    // --- END OF FIX R10 ---
 
     loadAllData();
 });
