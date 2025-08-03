@@ -10,8 +10,11 @@ const tmdbApi = axios.create({
 });
 
 const getTmdbMetadata = async (title, year) => {
+    // --- START OF FIX R9 ---
+    // Implement a 3-step search process for higher accuracy.
+
+    // Step 1: Primary Search (Title + Year, Global)
     logger.debug(`Searching TMDB for: "${title}" (${year})`);
-    
     try {
         const response = await tmdbApi.get('/search/multi', {
             params: { query: title, first_air_date_year: year, year: year },
@@ -26,20 +29,38 @@ const getTmdbMetadata = async (title, year) => {
         logger.error({ err: error.message }, `TMDB API error on primary search for "${title}"`);
     }
 
-    logger.warn(`No TMDB match with year. Retrying with title only for: "${title}"`);
+    // Step 2: Region-Specific Fallback (Title only, Region: IN)
+    logger.warn(`No TMDB match with year. Retrying with title only (Region: IN) for: "${title}"`);
+    try {
+        const response = await tmdbApi.get('/search/multi', {
+            params: { query: title, region: 'IN' },
+        });
+
+        if (response.data && response.data.results.length > 0) {
+            const result = response.data.results[0];
+            logger.info(`TMDB Indian-region match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
+            return await formatTmdbData(result);
+        }
+    } catch (error) {
+        logger.error({ err: error.message }, `TMDB API error on Indian-region search for "${title}"`);
+    }
+
+    // Step 3: Global Fallback (Title only)
+    logger.warn(`No Indian-region match. Retrying with title only (Global) for: "${title}"`);
     try {
         const response = await tmdbApi.get('/search/multi', { params: { query: title } });
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
-            logger.info(`TMDB fallback match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
+            logger.info(`TMDB global fallback match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
             return await formatTmdbData(result);
         }
     } catch (error) {
-        logger.error({ err: error.message }, `TMDB API error on fallback search for "${title}"`);
+        logger.error({ err: error.message }, `TMDB API error on global fallback search for "${title}"`);
     }
 
     logger.error(`No TMDB match found for "${title}" after all attempts.`);
     return null;
+    // --- END OF FIX R9 ---
 };
 
 const getTmdbMetadataById = async (id) => {
@@ -90,11 +111,9 @@ const formatTmdbData = async (tmdbResult) => {
 
     try {
         const externalIdsResponse = await tmdbApi.get(`/${media_type}/${tmdbResult.id}/external_ids`);
-        // --- START OF FIX R4 ---
         // Ensure imdb_id is stored as null if it's an empty string or other falsy value
         // to prevent unique constraint violations in the database.
         imdb_id = externalIdsResponse.data.imdb_id || null;
-        // --- END OF FIX R4 ---
     } catch (e) {
         logger.warn(`Could not fetch external IDs for TMDB ID ${tmdbResult.id}.`);
     }
