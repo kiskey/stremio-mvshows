@@ -16,6 +16,22 @@ const generateThreadHash = (title, magnetUris) => {
 
 const createCrawler = (crawledData) => {
     return new CheerioCrawler({
+        // --- START OF VERIFIED FIX R11 ---
+        // By default, crawlee's RequestQueue can persist its state, which prevents
+        // the crawler from re-visiting URLs on subsequent runs within the same process.
+        // To ensure each scheduled job performs a completely fresh crawl, we disable this persistence.
+
+        // This is the primary setting that solves the issue. It tells the RequestQueue
+        // to operate only in-memory and not save its state. When a new crawl is
+        // triggered, a new, empty, in-memory queue is created.
+        requestQueueConfiguration: {
+            persistState: false,
+        },
+
+        // This is a supporting setting that ensures cookies are not carried over
+        // between runs, guaranteeing full session isolation.
+        persistCookiesPerSession: false,
+        // --- END OF VERIFIED FIX R11 ---
         navigationTimeoutSecs: config.scraperTimeoutSecs,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
