@@ -31,6 +31,11 @@ const config = {
     scraperTimeoutSecs: parseInt(process.env.SCRAPER_TIMEOUT_SECS, 10) || 30,
     scraperUserAgent: process.env.SCRAPER_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
 
+    // --- START OF FIX R12 ---
+    // Scheduler Configuration
+    mainWorkflowCron: process.env.MAIN_WORKFLOW_CRON || '0 */6 * * *', // Defaults to every 6 hours
+    // --- END OF FIX R12 ---
+
     // TMDB API Key
     tmdbApiKey: process.env.TMDB_API_KEY,
 
