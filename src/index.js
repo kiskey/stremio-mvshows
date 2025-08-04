@@ -38,17 +38,20 @@ async function main() {
     
     runFullWorkflow();
     
-    cron.schedule('0 */6 * * *', () => {
+    // --- START OF FIX R12 ---
+    // Use the configurable cron expression from the config file.
+    cron.schedule(config.mainWorkflowCron, () => {
         logger.info('Cron job triggered for main workflow...');
         runFullWorkflow();
     }, { scheduled: true, timezone: "Etc/UTC" });
+    // --- END OF FIX R12 ---
 
     cron.schedule('0 * * * *', () => {
         logger.info('Cron job triggered for tracker update...');
         fetchAndCacheTrackers();
     }, { scheduled: true, timezone: "Etc/UTC" });
     
-    logger.info(`Crawler scheduled for every 6 hours. Tracker list scheduled to update every hour.`);
+    logger.info(`Crawler scheduled with cron expression: "${config.mainWorkflowCron}". Tracker list scheduled to update every hour.`);
 }
 
 main().catch(err => {
