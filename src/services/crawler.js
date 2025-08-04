@@ -1,10 +1,10 @@
 // src/services/crawler.js
-const { CheerioCrawler, log } = require('crawlee');
+const { CheerioCrawler, log, purgeDefaultStorages } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
 const logger = require('../utils/logger');
 const fs = require('fs/promises');
-const path = 'path';
+const path = require('path');
 
 let proxyIndex = 0;
 
@@ -15,20 +15,11 @@ const generateThreadHash = (title, magnetUris) => {
 };
 
 const createCrawler = (crawledData) => {
+    // --- START OF VERIFIED FIX R11 ---
+    // The constructor is cleaned of any invalid state-related properties
+    // that were causing the application to crash.
     return new CheerioCrawler({
-        // --- START OF VERIFIED FIX R11 ---
-        // These settings ensure that each crawl run is completely stateless and
-        // does not remember the state of previous runs within the same process.
-
-        // This is the most critical option. It prevents the crawler from saving
-        // its state (session data, queue progress, etc.) to a persistent location.
-        persistState: false,
-
-        // This ensures that a fresh, non-shared session is used for requests,
-        // preventing any carry-over of cookies or other session-based state.
-        useSessionPool: false,
-        // --- END OF VERIFIED FIX R11 ---
-
+    // --- END OF VERIFIED FIX R11 ---
         navigationTimeoutSecs: config.scraperTimeoutSecs,
         maxConcurrency: config.scraperConcurrency,
         maxRequestRetries: config.scraperRetryCount,
@@ -128,6 +119,14 @@ async function handleDetailPage({ $, request }, crawledData) {
 }
 
 const runCrawler = async () => {
+    // --- START OF VERIFIED FIX R11 ---
+    // This command explicitly purges any default storage (Request Queues, KeyValueStores, etc.)
+    // that might have persisted from a previous run within the same process.
+    // This is the definitive way to ensure a completely clean slate for each crawl.
+    logger.info('Purging default storages to ensure a fresh crawl...');
+    await purgeDefaultStorages();
+    // --- END OF VERIFIED FIX R11 ---
+
     const crawledData = [];
     const crawler = createCrawler(crawledData);
     const startRequests = [];
@@ -138,7 +137,6 @@ const runCrawler = async () => {
             const cleanBaseUrl = baseUrl.replace(/\/$/, '');
             for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
                 let url = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
-                // --- START OF VERIFIED FIX R11 ---
                 // Add a dynamic uniqueKey to each start request. This forces the crawler
                 // to treat the URL as new on every run, bypassing any internal
                 // deduplication checks that might persist within the process.
@@ -148,7 +146,6 @@ const runCrawler = async () => {
                     label: 'LIST', 
                     userData: { type, catalogId } 
                 });
-                // --- END OF VERIFIED FIX R11 ---
             }
         });
     };
