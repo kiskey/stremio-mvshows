@@ -1,5 +1,5 @@
 // src/services/crawler.js
-const { CheerioCrawler, log } = require('crawlee');
+const { CheerioCrawler, log, RequestQueue } = require('crawlee');
 const crypto = require('crypto');
 const config = require('../config/config');
 const logger = require('../utils/logger');
@@ -14,22 +14,15 @@ const generateThreadHash = (title, magnetUris) => {
     return crypto.createHash('sha256').update(data).digest('hex');
 };
 
-const createCrawler = (crawledData) => {
+// This function is now simplified as the queue is created in runCrawler.
+const createCrawler = (crawledData, requestQueue) => {
     return new CheerioCrawler({
         // --- START OF VERIFIED FIX R11 ---
-        // By default, crawlee's RequestQueue can persist its state, which prevents
-        // the crawler from re-visiting URLs on subsequent runs within the same process.
-        // To ensure each scheduled job performs a completely fresh crawl, we disable this persistence.
-
-        // This is the primary setting that solves the issue. It tells the RequestQueue
-        // to operate only in-memory and not save its state. When a new crawl is
-        // triggered, a new, empty, in-memory queue is created.
-        requestQueueConfiguration: {
-            persistState: false,
-        },
-
-        // This is a supporting setting that ensures cookies are not carried over
-        // between runs, guaranteeing full session isolation.
+        // Pass the pre-configured, ephemeral request queue directly to the crawler.
+        // This ensures that each run has its own fresh, in-memory queue,
+        // preventing the crawler from skipping already-visited URLs on scheduled runs.
+        requestQueue,
+        // This supporting setting ensures cookies are not carried over between runs.
         persistCookiesPerSession: false,
         // --- END OF VERIFIED FIX R11 ---
         navigationTimeoutSecs: config.scraperTimeoutSecs,
@@ -132,7 +125,13 @@ async function handleDetailPage({ $, request }, crawledData) {
 
 const runCrawler = async () => {
     const crawledData = [];
-    const crawler = createCrawler(crawledData);
+    
+    // --- START OF VERIFIED FIX R11 ---
+    // Manually open an anonymous, in-memory request queue for this specific run.
+    const requestQueue = await RequestQueue.open();
+    const crawler = createCrawler(crawledData, requestQueue);
+    // --- END OF VERIFIED FIX R11 ---
+
     const startRequests = [];
     
     const addScrapeTasks = (urls, type, catalogId) => {
