@@ -63,7 +63,11 @@ const runFullWorkflow = async () => {
                 continue;
             }
 
-            const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year);
+            // --- START OF FIX R13 ---
+            // Pass the known 'type' ('movie' or 'series') to the metadata lookup function
+            // to ensure it uses the correct, type-specific TMDB endpoint.
+            const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year, type);
+            // --- END OF FIX R13 ---
             
             const t = await sequelize.transaction();
             try {
