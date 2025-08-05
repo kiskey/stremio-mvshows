@@ -9,50 +9,52 @@ const tmdbApi = axios.create({
     timeout: 5000
 });
 
-const getTmdbMetadata = async (title, year) => {
-    // --- START OF FIX R9 ---
-    // Implement a 3-step search process for higher accuracy.
+// --- START OF FIX R13 ---
+// The function now accepts a `type` ('movie' or 'series') to ensure it uses the correct TMDB endpoint.
+const getTmdbMetadata = async (title, year, type) => {
+    // Determine the correct, type-specific search endpoint.
+    const endpoint = type === 'movie' ? '/search/movie' : '/search/tv';
+    logger.debug({ title, year, type, endpoint }, 'Performing type-specific TMDB search.');
 
-    // Step 1: Primary Search (Title + Year, Global)
-    logger.debug(`Searching TMDB for: "${title}" (${year})`);
+    // Step 1: Primary Search (Title + Year, Type-Specific)
     try {
-        const response = await tmdbApi.get('/search/multi', {
+        const response = await tmdbApi.get(endpoint, {
             params: { query: title, first_air_date_year: year, year: year },
         });
 
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
-            logger.info(`TMDB primary match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
-            return await formatTmdbData(result);
+            logger.info(`TMDB primary match found for "${title}": (Type: ${type}, ID: ${result.id})`);
+            return await formatTmdbData(result, type);
         }
     } catch (error) {
         logger.error({ err: error.message }, `TMDB API error on primary search for "${title}"`);
     }
 
-    // Step 2: Region-Specific Fallback (Title only, Region: IN)
+    // Step 2: Region-Specific Fallback (Title only, Region: IN, Type-Specific)
     logger.warn(`No TMDB match with year. Retrying with title only (Region: IN) for: "${title}"`);
     try {
-        const response = await tmdbApi.get('/search/multi', {
+        const response = await tmdbApi.get(endpoint, {
             params: { query: title, region: 'IN' },
         });
 
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
-            logger.info(`TMDB Indian-region match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
-            return await formatTmdbData(result);
+            logger.info(`TMDB Indian-region match found for "${title}": (Type: ${type}, ID: ${result.id})`);
+            return await formatTmdbData(result, type);
         }
     } catch (error) {
         logger.error({ err: error.message }, `TMDB API error on Indian-region search for "${title}"`);
     }
 
-    // Step 3: Global Fallback (Title only)
+    // Step 3: Global Fallback (Title only, Type-Specific)
     logger.warn(`No Indian-region match. Retrying with title only (Global) for: "${title}"`);
     try {
-        const response = await tmdbApi.get('/search/multi', { params: { query: title } });
+        const response = await tmdbApi.get(endpoint, { params: { query: title } });
         if (response.data && response.data.results.length > 0) {
             const result = response.data.results[0];
-            logger.info(`TMDB global fallback match found for "${title}": (Type: ${result.media_type}, ID: ${result.id})`);
-            return await formatTmdbData(result);
+            logger.info(`TMDB global fallback match found for "${title}": (Type: ${type}, ID: ${result.id})`);
+            return await formatTmdbData(result, type);
         }
     } catch (error) {
         logger.error({ err: error.message }, `TMDB API error on global fallback search for "${title}"`);
@@ -60,29 +62,33 @@ const getTmdbMetadata = async (title, year) => {
 
     logger.error(`No TMDB match found for "${title}" after all attempts.`);
     return null;
-    // --- END OF FIX R9 ---
 };
+// --- END OF FIX R13 ---
 
 const getTmdbMetadataById = async (id) => {
     try {
         let result;
+        let type;
         if (id.startsWith('tt')) {
             logger.debug(`Looking up by IMDb ID: ${id}`);
             const findResponse = await tmdbApi.get(`/find/${id}`, { params: { external_source: 'imdb_id' } });
             result = findResponse.data.tv_results[0] || findResponse.data.movie_results[0];
+            if (findResponse.data.tv_results[0]) type = 'series';
+            if (findResponse.data.movie_results[0]) type = 'movie';
         } else if (id.includes(':')) {
-            const [type, tmdbId] = id.split(':');
-            logger.debug(`Looking up by TMDB ID: ${tmdbId} (Type: ${type})`);
-            if (type !== 'tv' && type !== 'movie') {
-                logger.error(`Invalid type in manual ID: ${type}`); return null;
+            const [tmdbType, tmdbId] = id.split(':');
+            logger.debug(`Looking up by TMDB ID: ${tmdbId} (Type: ${tmdbType})`);
+            if (tmdbType !== 'tv' && tmdbType !== 'movie') {
+                logger.error(`Invalid type in manual ID: ${tmdbType}`); return null;
             }
-            const findResponse = await tmdbApi.get(`/${type}/${tmdbId}`);
+            type = tmdbType === 'tv' ? 'series' : 'movie';
+            const findResponse = await tmdbApi.get(`/${tmdbType}/${tmdbId}`);
             result = findResponse.data;
         } else {
             logger.error(`Invalid manual ID format provided: ${id}. Must be 'tt...' or 'tv:...' or 'movie:...'.`);
             return null;
         }
-        if (result) { return await formatTmdbData(result); }
+        if (result) { return await formatTmdbData(result, type); }
     } catch (error) {
         logger.error({ err: error.message }, `TMDB API error during manual lookup for ID: ${id}`);
     }
@@ -105,14 +111,15 @@ const getTmdbEpisodeData = async (tmdbId, seasonNumber) => {
 };
 
 
-const formatTmdbData = async (tmdbResult) => {
+const formatTmdbData = async (tmdbResult, type) => {
     let imdb_id = null;
-    const media_type = tmdbResult.media_type || (tmdbResult.first_air_date ? 'tv' : 'movie');
+    // --- START OF FIX R13 ---
+    // Use the provided `type` to determine the media_type, which is more reliable than guessing.
+    const media_type = type === 'series' ? 'tv' : 'movie';
+    // --- END OF FIX R13 ---
 
     try {
         const externalIdsResponse = await tmdbApi.get(`/${media_type}/${tmdbResult.id}/external_ids`);
-        // Ensure imdb_id is stored as null if it's an empty string or other falsy value
-        // to prevent unique constraint violations in the database.
         imdb_id = externalIdsResponse.data.imdb_id || null;
     } catch (e) {
         logger.warn(`Could not fetch external IDs for TMDB ID ${tmdbResult.id}.`);
@@ -125,7 +132,6 @@ const formatTmdbData = async (tmdbResult) => {
         dbEntry: {
             tmdb_id: tmdbResult.id.toString(),
             imdb_id: imdb_id,
-            // FIX: Add the parsed year to the database entry
             year: year,
             data: {
                 media_type: media_type,
